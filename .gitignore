@@ -1,0 +1,38 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# next.js / build
+.next/
+out/
+build/
+next-env.d.ts
+*.tsbuildinfo
+
+# vercel
+.vercel/
+
+# tests
+coverage/
+
+# env / secrets (เก็บเฉพาะ .env.example)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# editor / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# claude code (ค่าเฉพาะเครื่อง)
+.claude/settings.local.json
