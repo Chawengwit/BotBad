@@ -58,7 +58,7 @@ async function resolveMessages(
 
     return runOrExplain(async () => {
       const user = await ensureUser(groupId, userId, context.accessToken);
-      return handlePostback(parsed, { params, lineGroupId: groupId, userId: user.id });
+      return handlePostback(parsed, { params, lineGroupId: groupId, user });
     }, context.accessToken);
   }
 
@@ -77,7 +77,7 @@ async function resolveMessages(
 
   return runOrExplain(async () => {
     const user = await ensureUser(groupId, userId, context.accessToken);
-    return handleRuleCommand({ command, lineGroupId: groupId, userId: user.id });
+    return handleRuleCommand({ command, lineGroupId: groupId, user });
   }, context.accessToken);
 }
 

@@ -2,7 +2,9 @@ import { z } from "zod";
 import { AppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
 import { addDays, DATE_PATTERN, TIME_PATTERN, todayInBangkok } from "@/lib/time";
-import { confirmCreateGame, gameCreated, text, wizardPrompt } from "@/line/messages";
+import { confirmCreateGame, gameCard, text, wizardPrompt } from "@/line/messages";
+import type { UserRow } from "@/repositories/types";
+import { doJoin, doLeave, doList } from "./game-actions";
 import {
   expirePendingAction,
   findUsablePendingAction,
@@ -24,6 +26,10 @@ const postbackSchema = z.discriminatedUnion("action", [
   }),
   z.object({ action: z.literal("confirm"), pending_id: z.uuid() }),
   z.object({ action: z.literal("reject"), pending_id: z.uuid() }),
+  // ปุ่มบนการ์ดรอบตี ทำกับรอบที่เปิดอยู่ของกลุ่มนั้น ไม่ต้องอ้างรอบ
+  z.object({ action: z.literal("join") }),
+  z.object({ action: z.literal("leave") }),
+  z.object({ action: z.literal("list") }),
 ]);
 
 export type PostbackParams = { date?: string; time?: string };
@@ -77,26 +83,32 @@ export async function handlePostback(
   input: {
     params: PostbackParams;
     lineGroupId: string;
-    userId: string;
+    user: UserRow;
   },
 ): Promise<LineMessage[]> {
+  const userId = input.user.id;
+
+  if (parsed.action === "join") return doJoin(input.lineGroupId, input.user);
+  if (parsed.action === "leave") return doLeave(input.lineGroupId, input.user);
+  if (parsed.action === "list") return doList(input.lineGroupId);
+
   if (parsed.action === "reject") {
     const pending = await findUsablePendingAction(parsed.pending_id, input.lineGroupId);
     if (!pending) throw new AppError("PENDING_EXPIRED");
-    if (pending.requested_by !== input.userId) throw new AppError("NOT_REQUESTER");
+    if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
 
     await expirePendingAction(parsed.pending_id, input.lineGroupId);
     return [text("ยกเลิกแล้ว ไม่ได้เปิดรอบตีนะ")];
   }
 
   if (parsed.action === "confirm") {
-    const game = await confirmCreateGameService(parsed.pending_id, input.lineGroupId, input.userId);
-    return [gameCreated(game)];
+    const game = await confirmCreateGameService(parsed.pending_id, input.lineGroupId, userId);
+    return [gameCard(game, 0, "🏸 เปิดรอบตีแล้ว")];
   }
 
   const pending = await findUsablePendingAction(parsed.pending_id, input.lineGroupId);
   if (!pending) throw new AppError("PENDING_EXPIRED");
-  if (pending.requested_by !== input.userId) throw new AppError("NOT_REQUESTER");
+  if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
 
   const { field, value } = draftValue(parsed.step, parsed.value, input.params, todayInBangkok());
   const payload = { ...pending.payload, [field]: value };

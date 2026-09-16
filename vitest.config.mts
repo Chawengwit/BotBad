@@ -7,5 +7,8 @@ export default defineConfig({
   },
   test: {
     include: ["tests/**/*.test.ts"],
+    // เทสที่ต่อฐานข้อมูลจริงยิงไปสิงคโปร์ ค่า default 5 วินาทีไม่พอ
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
   },
 });

@@ -11,12 +11,14 @@ let client: Sql | null = null;
 export function createSql(
   url: string = getDatabaseUrl(),
   schema: string = getDatabaseSchema(),
+  // เปิดให้เทสสร้าง pool หลาย connection เพื่อจำลองคนกดพร้อมกันจริง ๆ
+  options: { max?: number } = {},
 ): Sql {
   return postgres(url, {
     // Supabase Transaction Pooler (port 6543) ไม่รองรับ prepared statement
     prepare: false,
     // serverless: 1 connection ต่อ instance จะได้ไม่กิน connection limit ของ Free tier
-    max: 1,
+    max: options.max ?? 1,
     idle_timeout: 20,
     connect_timeout: 10,
     connection: {

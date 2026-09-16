@@ -1,5 +1,5 @@
 import type { ErrorCode } from "@/errors/app-errors";
-import type { ButtonsMessage, LineMessage, TextMessage } from "@/lib/line";
+import type { ButtonsMessage, LineMessage, MessageAction, TextMessage } from "@/lib/line";
 import { formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
 import type { GameDraft } from "@/services/game.service";
 import type { GameRow } from "@/repositories/types";
@@ -124,17 +124,39 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): ButtonsM
   ]);
 }
 
-export function gameCreated(game: GameRow): TextMessage {
+const GAME_ACTIONS: MessageAction[] = [
+  { type: "postback", label: "🙋 ลงชื่อ", displayText: "ลงชื่อ", data: "action=join" },
+  { type: "postback", label: "❌ ถอนชื่อ", displayText: "ถอนชื่อ", data: "action=leave" },
+  { type: "postback", label: "👀 รายชื่อ", displayText: "ใครตีบ้าง", data: "action=list" },
+];
+
+/**
+ * การ์ดรอบตีพร้อมปุ่ม
+ * LINE แก้ข้อความที่ส่งไปแล้วไม่ได้ ทุกครั้งที่มีความเคลื่อนไหวจึงส่งการ์ดใบใหม่
+ */
+export function gameCard(game: GameRow, joinedCount: number, headline?: string): ButtonsMessage {
+  const body = [
+    headline ?? "🏸 BADMINTON",
+    `📅 ${formatThaiDate(game.play_date)}`,
+    `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
+    `🏟️ ${game.court_count} คอร์ท · 👥 ${joinedCount}/${game.max_players} คน`,
+  ].join("\n");
+
+  return buttons("รอบตีแบด", body, GAME_ACTIONS);
+}
+
+export function playerList(game: GameRow, players: { display_name: string }[]): TextMessage {
+  const names = players.map((player, index) => `${index + 1}. ${player.display_name}`);
+
   return text(
     [
-      "🏸 BADMINTON",
-      "",
-      `📅 ${formatThaiDate(game.play_date)}`,
+      `🏸 ${formatThaiDate(game.play_date)}`,
       `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
       `🏟️ ${game.court_count} คอร์ท`,
-      `👥 0/${game.max_players} คน`,
       "",
-      "ยังไม่มีคนลงชื่อ",
+      `👥 ${players.length}/${game.max_players} คน`,
+      "",
+      ...(names.length > 0 ? names : ["ยังไม่มีคนลงชื่อ"]),
     ].join("\n"),
   );
 }
@@ -162,7 +184,16 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
       );
     }
     case "NO_OPEN_GAME":
-      return text("❌ ตอนนี้ไม่มีรอบตีที่เปิดอยู่");
+      return text('❌ ตอนนี้ไม่มีรอบตีที่เปิดอยู่\n\nพิมพ์ "บอทจ๋า เปิดตี" เพื่อเปิดรอบใหม่');
+    case "ALREADY_JOINED":
+      return text("ℹ️ คุณลงชื่อรอบนี้ไปแล้ว");
+    case "NOT_JOINED":
+      return text("ℹ️ คุณยังไม่ได้ลงชื่อรอบนี้");
+    case "GAME_FULL": {
+      const current = details.current_players ?? "";
+      const max = details.max_players ?? "";
+      return text(`⛔ รอบนี้เต็มแล้ว\n\n🏸 ${current}/${max} คน\n\nไม่สามารถลงชื่อเพิ่มได้`);
+    }
     case "DATE_IN_PAST":
       return text("❌ วันเวลานี้ผ่านไปแล้ว ลองเลือกใหม่นะ");
     case "PENDING_EXPIRED":
