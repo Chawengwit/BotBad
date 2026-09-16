@@ -261,6 +261,30 @@ export async function confirmCreateBill(
   return { game, bill, shares: await listBillShares(bill.id) };
 }
 
+/** สรุปบิลสั้น ๆ สำหรับใส่ใน system prompt คืน null เมื่อกลุ่มยังไม่มีบิล */
+export async function findBillContext(
+  lineGroupId: string,
+  userId: string,
+): Promise<{
+  perPersonBaht: number;
+  unpaidCount: number;
+  settled: boolean;
+  requesterPaid: boolean | null;
+} | null> {
+  const bill = await findActiveBill(lineGroupId);
+  if (!bill) return null;
+
+  const shares = await listBillShares(bill.id);
+  const { unpaid, settled } = summarize(shares);
+
+  return {
+    perPersonBaht: toBaht(shares[0]?.amount_satang ?? 0),
+    unpaidCount: unpaid.length,
+    settled,
+    requesterPaid: shares.find((share) => share.user_id === userId)?.paid ?? null,
+  };
+}
+
 /**
  * คนที่ยังไม่จ่ายของรอบนั้น ใช้เตือนตอนปิดรอบหรือยกเลิกรอบ
  * ไม่มีบิลก็ไม่มีอะไรต้องเตือน ก๊วนที่ไม่ใช้ฟีเจอร์คิดเงินต้องไม่รู้สึกอะไรเลย (PRP §5.7)

@@ -141,6 +141,54 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
     expect(messageTexts(collected[2]!.messages)).toContain("1/8 คน");
   });
 
+  it("เปลี่ยนใจกลับไปกลับมาเกินสองครั้ง บอทจะแซว", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected, "เชวง");
+
+    // ลงชื่อครั้งแรกไม่นับว่าเปลี่ยนใจ
+    await handleEvent(postbackEvent("action=join", owner.lineUserId), context);
+    expect(messageTexts(collected.at(-1)!.messages)).not.toContain("เปลี่ยนใจ");
+
+    // ถอน (1) แล้วลงใหม่ (2) ยังไม่ว่าอะไร
+    await handleEvent(postbackEvent("action=leave", owner.lineUserId), context);
+    await handleEvent(postbackEvent("action=join", owner.lineUserId), context);
+    expect(messageTexts(collected.at(-1)!.messages)).not.toContain("เปลี่ยนใจ");
+
+    // ถอนอีกเป็นครั้งที่ 3 คราวนี้โดนแซว
+    await handleEvent(postbackEvent("action=leave", owner.lineUserId), context);
+    const nagged = messageTexts(collected.at(-1)!.messages);
+    expect(nagged).toContain("เชวง เปลี่ยนใจรอบที่ 3");
+    expect(nagged).toContain("จะเล่นหรือไม่เล่น");
+
+    // แซวแล้วก็ยังทำงานปกติ ไม่ได้บล็อกอะไร
+    const rows = await sql<{ status: string }[]>`
+      SELECT status FROM game_players WHERE user_id = ${owner.user.id}
+    `;
+    expect(rows[0]).toMatchObject({ status: "cancelled" });
+  });
+
+  it("คนละคนนับแยกกัน ไม่ใช่นับรวมทั้งกลุ่ม", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+    const friend = await newUser("Bank");
+
+    const collected: Collected[] = [];
+    const ownerContext = contextFor(collected, "เชวง");
+
+    await handleEvent(postbackEvent("action=join", owner.lineUserId), ownerContext);
+    await handleEvent(postbackEvent("action=leave", owner.lineUserId), ownerContext);
+    await handleEvent(postbackEvent("action=join", owner.lineUserId), ownerContext);
+    await handleEvent(postbackEvent("action=leave", owner.lineUserId), ownerContext);
+
+    const friendContext = contextFor(collected, "Bank");
+    await handleEvent(postbackEvent("action=join", friend.lineUserId), friendContext);
+
+    expect(messageTexts(collected.at(-1)!.messages)).not.toContain("เปลี่ยนใจ");
+  });
+
   it("ถอนชื่อทั้งที่ยังไม่ได้ลง จะบอกให้รู้", async () => {
     const owner = await newUser("เชวง");
     await openGame(owner.user.id);

@@ -684,6 +684,10 @@ MVP ไม่มี Waiting List
 
 # 13. Leave Game
 
+ถอนชื่อแล้วกลับมาลงใหม่ได้เสมอ แต่ถ้าเปลี่ยนใจเกิน 2 ครั้งในรอบเดียว
+(`game_players.change_count >= 3`) บอทจะแซวต่อท้ายว่า "ตกลงจะเล่นหรือไม่เล่น"
+เป็นมุขในก๊วน ไม่ได้บล็อกอะไร และนับแยกกันของใครของมัน
+
 User กด:
 
 ```text
@@ -790,6 +794,9 @@ Bot (Quick Reply):
 - ชื่อคอร์ท
 - ลิงก์แผนที่
 - เลขพร้อมเพย์
+
+แก้ไปแก้มาเกิน 2 ครั้ง (`games.edit_count >= 3`) บอทจะบ่นต่อท้ายว่าเปลือง token
+เป็นมุขในก๊วน ไม่ได้บล็อกอะไร ยังแก้ได้ตามปกติ
 
 ทุกการแก้ไขต้องผ่านการ์ดยืนยัน (`pending_actions` type `edit_game`)
 
@@ -1052,6 +1059,7 @@ court_name
 location_url
 promptpay
 status
+edit_count
 created_at
 updated_at
 ```
@@ -1085,9 +1093,12 @@ id
 game_id
 user_id
 status
+change_count
 joined_at
 updated_at
 ```
+
+`change_count` = จำนวนครั้งที่เปลี่ยนใจหลังลงชื่อครั้งแรก (ลงครั้งแรก = 0, ถอน = 1, กลับมาลงใหม่ = 2)
 
 Status:
 
@@ -1392,10 +1403,11 @@ CREATE TABLE conversation_sessions (
 - Edit Game
 - Cancel Game
 - Close Game
+- คิดเงิน / ยกเลิกบิล
 
 สมาชิกทั่วไปสามารถ:
 
-- Create Game (ถ้ากลุ่มยังไม่มีรอบ open)
+- Create Game (ใครในกลุ่มก็เปิดได้ แต่เปิดได้เฉพาะตอนที่กลุ่มยังไม่มีรอบ `open`)
 - Join
 - Leave
 - List Players

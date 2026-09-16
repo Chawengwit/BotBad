@@ -34,7 +34,8 @@ export async function findOpenGame(
            status,
            court_name,
            location_url,
-           promptpay
+           promptpay,
+           edit_count
     FROM games
     WHERE line_group_id = ${lineGroupId} AND status = 'open'
   `;
@@ -58,7 +59,8 @@ export async function findGameById(
            status,
            court_name,
            location_url,
-           promptpay
+           promptpay,
+           edit_count
     FROM games
     WHERE id = ${gameId}
   `;
@@ -112,7 +114,8 @@ export async function insertGame(game: NewGame, sql: Queryable = getSql()): Prom
               status,
               court_name,
               location_url,
-              promptpay
+              promptpay,
+              edit_count
   `;
 
   const created = rows[0];
@@ -147,6 +150,7 @@ export async function updateGame(
         court_name = COALESCE(${patch.courtName ?? null}::text, court_name),
         location_url = COALESCE(${patch.locationUrl ?? null}::text, location_url),
         promptpay = COALESCE(${patch.promptpay ?? null}::text, promptpay),
+        edit_count = edit_count + 1,
         updated_at = now()
     WHERE id = ${gameId}
     RETURNING id,
@@ -160,7 +164,8 @@ export async function updateGame(
               status,
               court_name,
               location_url,
-              promptpay
+              promptpay,
+              edit_count
   `;
 
   const updated = rows[0];

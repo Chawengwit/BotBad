@@ -197,6 +197,9 @@ R16. ห้ามทำรายการแทนสมาชิกคนอื
 | `list_players` | อ่าน | – | รายชื่อผู้เล่น |
 | `join_game` | เขียนทันที | – | ลงชื่อคนที่พิมพ์ |
 | `leave_game` | เขียนทันที | – | ถอนชื่อคนที่พิมพ์ |
+| `get_bill` | อ่าน | – | บิลของกลุ่ม ยอดต่อคน ใครจ่ายแล้ว/ยังไม่จ่าย |
+| `propose_create_bill` | ขอยืนยัน | `court_fee?`, `shuttle_count?`, `shuttle_price?`, `other_items?` | สร้าง pending action |
+| `mark_my_payment` | เขียนทันที | `paid` | บันทึกว่าคนที่พิมพ์จ่ายแล้วหรือยัง |
 | `propose_create_game` | ขอยืนยัน | `court_count?`, `max_players?`, `play_date?`, `start_time?`, `duration_minutes?`, `court_name?`, `location_url?`, `promptpay?` | `MISSING_FIELDS` หรือสร้าง pending action |
 | `propose_edit_game` | ขอยืนยัน | ช่องเดียวกัน (optional ทั้งหมด) | สร้าง pending action |
 | `propose_cancel_game` | ขอยืนยัน | – | สร้าง pending action |

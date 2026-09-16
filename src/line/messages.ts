@@ -636,6 +636,32 @@ export function billCancelled(): TextMessage {
   return text('🗑️ ยกเลิกบิลแล้ว\n\nคิดใหม่ได้ด้วย "บอทจ๋า คิดเงิน"');
 }
 
+/**
+ * แซวคนที่เปลี่ยนใจบ่อย เป็นมุขในก๊วน ไม่ได้บล็อกอะไรทั้งนั้น
+ * เตือนตั้งแต่ครั้งที่ 3 เป็นต้นไป (เปลี่ยนใจได้ 2 ครั้งโดยบอทไม่ว่าอะไร)
+ */
+export const NAG_AFTER_CHANGES = 3;
+
+export function nagFlipFlop(displayName: string, changeCount: number): TextMessage {
+  return text(
+    [
+      `🙄 ${displayName} เปลี่ยนใจรอบที่ ${changeCount} แล้วนะ`,
+      "",
+      "ตกลงจะเล่นหรือไม่เล่น เอาให้ชัดทีนึงงง 😤",
+    ].join("\n"),
+  );
+}
+
+export function nagEdits(editCount: number): TextMessage {
+  return text(
+    [
+      `😮‍💨 แก้รอบนี้ไปแล้ว ${editCount} ครั้งนะ`,
+      "",
+      "จะเปลี่ยนอีกไหม เปลือง token นะจ๊ะ 💸",
+    ].join("\n"),
+  );
+}
+
 export function gameSummary(game: GameRow): string {
   return [
     ...(game.court_name ? [`🏸 ${game.court_name}`] : []),

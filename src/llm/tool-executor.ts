@@ -2,15 +2,21 @@ import { isAppError, type ErrorCode } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
 import { endTime, formatThaiDate } from "@/lib/time";
 import {
+  billCard,
+  confirmBill,
   confirmCancelGame,
   confirmCloseGame,
   confirmCreateGame,
   confirmEditGame,
   gameCard,
+  NAG_AFTER_CHANGES,
+  nagFlipFlop,
+  paymentRecorded,
+  paymentUndone,
   playerList,
 } from "@/line/messages";
 import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
-import { createPendingAction } from "@/repositories/pending-action.repository";
+import { createPendingAction, updatePendingPayload } from "@/repositories/pending-action.repository";
 import { findPlayerStatus } from "@/repositories/player.repository";
 import type { UserRow } from "@/repositories/types";
 import {
@@ -20,7 +26,17 @@ import {
   validatePatch,
 } from "@/services/game-admin.service";
 import { gameDraftSchema, missingDraftFields } from "@/services/game.service";
-import { unpaidSharesForGame } from "@/services/bill.service";
+import {
+  billDraftSchema,
+  buildBillItems,
+  getBill,
+  markMyPayment,
+  startCreateBill,
+  summarize,
+  toBaht,
+  totalOf,
+  unpaidSharesForGame,
+} from "@/services/bill.service";
 import { joinGame, leaveGame, listPlayers } from "@/services/player.service";
 import { isToolName, toolSchemas, type ToolName } from "./tools";
 
@@ -98,16 +114,18 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
     }
 
     case "join_game": {
-      const { game, joinedCount } = await joinGame(lineGroupId, user.id);
-      return ok({ current_players: joinedCount, max_players: game.max_players }, [
+      const { game, joinedCount, changeCount } = await joinGame(lineGroupId, user.id);
+      return ok({ current_players: joinedCount, max_players: game.max_players, changed_mind: changeCount }, [
         gameCard(game, joinedCount, `✅ ${user.display_name} ลงชื่อแล้ว`),
+        ...(changeCount >= NAG_AFTER_CHANGES ? [nagFlipFlop(user.display_name, changeCount)] : []),
       ]);
     }
 
     case "leave_game": {
-      const { game, joinedCount } = await leaveGame(lineGroupId, user.id);
-      return ok({ current_players: joinedCount, max_players: game.max_players }, [
+      const { game, joinedCount, changeCount } = await leaveGame(lineGroupId, user.id);
+      return ok({ current_players: joinedCount, max_players: game.max_players, changed_mind: changeCount }, [
         gameCard(game, joinedCount, `👋 ${user.display_name} ถอนชื่อแล้ว`),
+        ...(changeCount >= NAG_AFTER_CHANGES ? [nagFlipFlop(user.display_name, changeCount)] : []),
       ]);
     }
 
@@ -168,6 +186,61 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
       return ok({ status: "awaiting_confirmation" }, [
         confirmCloseGame(pending.id, game, joinedCount, await unpaidSharesForGame(game.id)),
       ]);
+    }
+
+    case "get_bill": {
+      const { game, bill, shares } = await getBill(lineGroupId);
+      const { paid, unpaid, unpaidTotalSatang, settled } = summarize(shares);
+
+      return ok(
+        {
+          items: bill.items.map((item) => ({
+            label: item.label,
+            quantity: item.quantity,
+            amount_baht: toBaht(item.amount_satang),
+          })),
+          total_baht: toBaht(bill.total_satang),
+          per_person_baht: toBaht(shares[0]?.amount_satang ?? 0),
+          paid: paid.map((share) => share.display_name),
+          unpaid: unpaid.map((share) => share.display_name),
+          unpaid_total_baht: toBaht(unpaidTotalSatang),
+          settled,
+          requester_paid: shares.find((share) => share.user_id === user.id)?.paid ?? null,
+        },
+        [billCard(game, bill, shares)],
+      );
+    }
+
+    case "propose_create_bill": {
+      const draft = billDraftSchema.parse(args);
+      // ตรวจสิทธิ์และเงื่อนไขก่อน จะได้ไม่สร้างการ์ดยืนยันที่กดไปก็ไม่ผ่าน
+      const { pending, game } = await startCreateBill(lineGroupId, user.id);
+
+      const items = buildBillItems(draft);
+      const saved = await updatePendingPayload(pending.id, {
+        ...(draft as Record<string, never>),
+        extras_done: true,
+      });
+      if (!saved) return fail("PENDING_EXPIRED");
+
+      return ok({ status: "awaiting_confirmation", total_baht: toBaht(totalOf(items)) }, [
+        confirmBill(pending.id, game, items, totalOf(items), await countJoinedPlayers(game.id)),
+      ]);
+    }
+
+    case "mark_my_payment": {
+      const paid = Boolean(args.paid);
+      const { shares, amountSatang } = await markMyPayment(lineGroupId, user.id, paid);
+      const { unpaid, settled } = summarize(shares);
+
+      return ok(
+        { paid, amount_baht: toBaht(amountSatang), unpaid_count: unpaid.length, settled },
+        [
+          paid
+            ? paymentRecorded(user.display_name, amountSatang, shares)
+            : paymentUndone(user.display_name, shares),
+        ],
+      );
     }
   }
 }

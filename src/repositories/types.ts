@@ -34,6 +34,8 @@ export type GameRow = {
   location_url: string | null;
   /** เลขพร้อมเพย์ที่จะให้โอนตอนคิดเงิน ตัวเลขล้วน 10 หรือ 13 หลัก */
   promptpay: string | null;
+  /** จำนวนครั้งที่แก้ไขรอบนี้ ใช้ให้บอทแซวคนที่เปลี่ยนไปเปลี่ยนมา */
+  edit_count: number;
 };
 
 export type BillStatus = "sent" | "cancelled";

@@ -21,7 +21,8 @@ export async function lockOpenGame(
            status,
            court_name,
            location_url,
-           promptpay
+           promptpay,
+           edit_count
     FROM games
     WHERE line_group_id = ${lineGroupId} AND status = 'open'
     FOR UPDATE
@@ -41,32 +42,42 @@ export async function findPlayerStatus(
   return rows[0]?.status ?? null;
 }
 
-/** ลงชื่อ หรือกลับเข้ามาใหม่หลังเคยถอนชื่อ */
+/**
+ * ลงชื่อ หรือกลับเข้ามาใหม่หลังเคยถอนชื่อ
+ * คืนจำนวนครั้งที่คนนี้เปลี่ยนใจในรอบนี้ (ลงครั้งแรกคือ 0)
+ */
 export async function joinPlayer(
   gameId: string,
   userId: string,
   sql: Queryable,
-): Promise<void> {
-  await sql`
+): Promise<number> {
+  const rows = await sql<{ change_count: number }[]>`
     INSERT INTO game_players (game_id, user_id, status)
     VALUES (${gameId}, ${userId}, 'joined')
     ON CONFLICT (game_id, user_id) DO UPDATE
       SET status = 'joined',
           joined_at = now(),
+          change_count = game_players.change_count + 1,
           updated_at = now()
+    RETURNING change_count
   `;
+  return rows[0]?.change_count ?? 0;
 }
 
 export async function cancelPlayer(
   gameId: string,
   userId: string,
   sql: Queryable,
-): Promise<void> {
-  await sql`
+): Promise<number> {
+  const rows = await sql<{ change_count: number }[]>`
     UPDATE game_players
-    SET status = 'cancelled', updated_at = now()
+    SET status = 'cancelled',
+        change_count = change_count + 1,
+        updated_at = now()
     WHERE game_id = ${gameId} AND user_id = ${userId}
+    RETURNING change_count
   `;
+  return rows[0]?.change_count ?? 0;
 }
 
 /** รายชื่อคนที่ลงชื่อไว้ เรียงตามลำดับที่ลงชื่อ (spec §14) */

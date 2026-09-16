@@ -281,6 +281,36 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     expect(rows[0]).toMatchObject({ promptpay: null });
   });
 
+  it("แก้รอบเกินสองครั้ง บอทจะบ่นเรื่องเปลือง token", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id, 1);
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+
+    async function editCourtCount(count: string): Promise<void> {
+      await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
+      await handleEvent(postbackEvent(actionData(collected, "🏟️ จำนวนคอร์ท"), owner.lineUserId), context);
+      await handleEvent(postbackEvent(actionData(collected, count), owner.lineUserId), context);
+      await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    }
+
+    await editCourtCount("2 คอร์ท");
+    expect(messageTexts(collected.at(-1)!.messages)).not.toContain("เปลือง token");
+
+    await editCourtCount("3 คอร์ท");
+    expect(messageTexts(collected.at(-1)!.messages)).not.toContain("เปลือง token");
+
+    await editCourtCount("4 คอร์ท");
+    const nagged = messageTexts(collected.at(-1)!.messages);
+    expect(nagged).toContain("แก้รอบนี้ไปแล้ว 3 ครั้ง");
+    expect(nagged).toContain("เปลือง token");
+
+    // บ่นแล้วก็ยังแก้ให้ตามปกติ
+    const rows = await sql`SELECT court_count FROM games WHERE line_group_id = ${GROUP_ID}`;
+    expect(rows[0]).toMatchObject({ court_count: 4 });
+  });
+
   it("คนที่ไม่ได้เปิดรอบ แก้ไข ยกเลิก หรือปิดรอบไม่ได้", async () => {
     const owner = await newUser("เชวง");
     const other = await newUser("Bank");

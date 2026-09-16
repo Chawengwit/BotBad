@@ -8,6 +8,7 @@ import {
   promptPaySchema,
 } from "@/services/game.service";
 import { DATE_PATTERN, TIME_PATTERN } from "@/lib/time";
+import { billDraftSchema } from "@/services/bill.service";
 
 /**
  * Tool ที่ LLM เรียกได้ (LLM Design §6)
@@ -50,6 +51,33 @@ const gameFields = {
   },
 };
 
+const billFields = {
+  court_fee: {
+    type: Type.NUMBER,
+    description: "ค่าคอร์ททั้งหมดเป็นบาท ใส่เฉพาะเมื่อผู้ใช้บอกมา ถ้าไม่มีค่าคอร์ทให้ข้ามไป",
+  },
+  shuttle_count: {
+    type: Type.INTEGER,
+    description: "จำนวนลูกแบดที่ใช้ ถ้าไม่ได้ใช้ลูกให้ส่ง 0",
+  },
+  shuttle_price: {
+    type: Type.NUMBER,
+    description: "ราคาลูกแบดต่อลูกเป็นบาท ต้องใส่คู่กับ shuttle_count ที่มากกว่า 0",
+  },
+  other_items: {
+    type: Type.ARRAY,
+    description: "ค่าใช้จ่ายอื่น เช่น ค่าน้ำ ค่าเช่าไม้ ค่าที่จอดรถ",
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        label: { type: Type.STRING, description: "ชื่อรายการ เช่น ค่าน้ำ" },
+        amount: { type: Type.NUMBER, description: "จำนวนเงินของรายการนี้เป็นบาท" },
+      },
+      required: ["label", "amount"],
+    },
+  },
+};
+
 export const toolDeclarations: FunctionDeclaration[] = [
   {
     name: "get_open_game",
@@ -81,6 +109,32 @@ export const toolDeclarations: FunctionDeclaration[] = [
     description:
       "เสนอแก้ไขรอบที่เปิดอยู่ ยังไม่แก้จริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ส่งเฉพาะค่าที่ต้องการเปลี่ยน ใช้ได้เฉพาะคนที่เปิดรอบ",
     parameters: { type: Type.OBJECT, properties: gameFields },
+  },
+  {
+    name: "get_bill",
+    description:
+      "ดูบิลค่าใช้จ่ายของกลุ่มนี้ ได้รายการค่าใช้จ่าย ยอดต่อคน และใครจ่ายแล้วหรือยังไม่จ่าย ใช้เมื่อผู้ใช้ถามว่าคนละเท่าไหร่ ใครยังไม่จ่าย หรือขอดูบิล",
+  },
+  {
+    name: "propose_create_bill",
+    description:
+      "เสนอคิดเงินค่ารอบตีที่เปิดอยู่ หารเท่ากันทุกคนที่ลงชื่อ ยังไม่ส่งบิลจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ใช้ได้เฉพาะคนที่เปิดรอบ ส่งเฉพาะค่าที่ผู้ใช้บอกมาแล้ว",
+    parameters: { type: Type.OBJECT, properties: billFields },
+  },
+  {
+    name: "mark_my_payment",
+    description:
+      "บันทึกว่า 'ผู้ใช้ที่พิมพ์ข้อความนี้' จ่ายเงินค่ารอบแล้วหรือยัง ใช้เมื่อผู้ใช้บอกว่าโอนแล้ว จ่ายแล้ว หรือขอแก้ว่ายังไม่ได้จ่าย ห้ามใช้บันทึกแทนคนอื่น",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        paid: {
+          type: Type.BOOLEAN,
+          description: "true = จ่ายแล้ว, false = กลับไปเป็นยังไม่จ่าย",
+        },
+      },
+      required: ["paid"],
+    },
   },
   {
     name: "propose_cancel_game",
@@ -120,6 +174,9 @@ export const toolSchemas = {
   propose_edit_game: gameArgs,
   propose_cancel_game: noArgs,
   propose_close_game: noArgs,
+  get_bill: noArgs,
+  propose_create_bill: billDraftSchema.strict(),
+  mark_my_payment: z.object({ paid: z.boolean() }).strict(),
 } as const;
 
 export type ToolName = keyof typeof toolSchemas;

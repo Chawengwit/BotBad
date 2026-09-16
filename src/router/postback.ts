@@ -11,6 +11,8 @@ import {
   gameCancelled,
   gameCard,
   gameClosed,
+  NAG_AFTER_CHANGES,
+  nagEdits,
 } from "@/line/messages";
 import { findLatestPromptPay, findOpenGame } from "@/repositories/game.repository";
 import {
@@ -155,7 +157,10 @@ async function runConfirm(
     }
     case "edit_game": {
       const { game, joinedCount } = await applyEditGame(pending.id, lineGroupId, userId);
-      return [gameCard(game, joinedCount, "✏️ แก้ไขรอบเรียบร้อย")];
+      return [
+        gameCard(game, joinedCount, "✏️ แก้ไขรอบเรียบร้อย"),
+        ...(game.edit_count >= NAG_AFTER_CHANGES ? [nagEdits(game.edit_count)] : []),
+      ];
     }
     case "cancel_game": {
       await applyCancelGame(pending.id, lineGroupId, userId);

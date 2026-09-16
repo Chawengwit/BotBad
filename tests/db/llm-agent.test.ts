@@ -47,6 +47,10 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
   async function cleanup(): Promise<void> {
     await sql`DELETE FROM conversation_sessions WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM pending_actions WHERE line_group_id = ${GROUP_ID}`;
+    await sql`DELETE FROM bill_shares WHERE bill_id IN (
+      SELECT b.id FROM bills b JOIN games g ON g.id = b.game_id WHERE g.line_group_id = ${GROUP_ID}
+    )`;
+    await sql`DELETE FROM bills WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
     await sql`DELETE FROM game_players WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
     await sql`DELETE FROM games WHERE line_group_id = ${GROUP_ID}`;
     if (lineUserIds.length > 0) {
@@ -134,6 +138,85 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
       SELECT action_type FROM pending_actions WHERE line_group_id = ${GROUP_ID}
     `;
     expect(pending[0]).toMatchObject({ action_type: "create_game" });
+  });
+
+  it("สั่งคิดเงินด้วยประโยคเดียวแล้วได้การ์ดยืนยัน ยังไม่ส่งบิลจริง", async () => {
+    const owner = await newUser();
+    const game = await openGame(owner.user.id);
+    await joinGame(GROUP_ID, owner.user.id);
+
+    const messages = await run(
+      owner,
+      "คิดเงินหน่อย ค่าคอร์ท 600 ลูกแบด 4 ลูก ลูกละ 25",
+      fakeClient([
+        call("propose_create_bill", { court_fee: 600, shuttle_count: 4, shuttle_price: 25 }),
+        say("กดปุ่มยืนยันด้านล่างได้เลย"),
+      ]),
+    );
+
+    const text = messageTexts(messages);
+    expect(text).toContain("รวม 700.00");
+    expect(text).toContain("หาร 1 คน");
+
+    expect(await sql`SELECT id FROM bills WHERE game_id = ${game.id}`).toHaveLength(0);
+    const pending = await sql<{ action_type: string }[]>`
+      SELECT action_type FROM pending_actions WHERE line_group_id = ${GROUP_ID}
+    `;
+    expect(pending[0]).toMatchObject({ action_type: "create_bill" });
+  });
+
+  it("คนที่ไม่ได้เปิดรอบสั่งคิดเงินไม่ได้ และ LLM ได้รู้เหตุผล", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+    const other = await newUser("Bank");
+    await joinGame(GROUP_ID, other.user.id);
+
+    const recorded: Recorded[] = [];
+    await run(
+      other,
+      "คิดเงินเลย ค่าคอร์ท 600",
+      fakeClient(
+        [call("propose_create_bill", { court_fee: 600 }), say("เฉพาะคนเปิดรอบเท่านั้นนะ")],
+        recorded,
+      ),
+    );
+
+    expect(JSON.stringify(recorded)).toContain("NOT_GAME_CREATOR");
+    expect(await sql`SELECT id FROM bills`).toHaveLength(0);
+  });
+
+  it("บอกว่าโอนแล้วผ่าน LLM บันทึกให้เจ้าตัวเท่านั้น", async () => {
+    const owner = await newUser("เชวง");
+    const game = await openGame(owner.user.id);
+    await joinGame(GROUP_ID, owner.user.id);
+
+    const other = await newUser("Bank");
+    await joinGame(GROUP_ID, other.user.id);
+
+    const bill = await sql<{ id: string }[]>`
+      INSERT INTO bills (game_id, created_by, items, total_satang)
+      VALUES (${game.id}, ${owner.user.id}, ${sql.json([
+        { label: "ค่าคอร์ท", quantity: 1, unit_price_satang: 20000, amount_satang: 20000 },
+      ])}, 20000)
+      RETURNING id
+    `;
+    await sql`
+      INSERT INTO bill_shares (bill_id, user_id, amount_satang)
+      VALUES (${bill[0]!.id}, ${owner.user.id}, 10000), (${bill[0]!.id}, ${other.user.id}, 10000)
+    `;
+
+    const messages = await run(
+      other,
+      "โอนแล้วนะ",
+      fakeClient([call("mark_my_payment", { paid: true }), say("บันทึกแล้ว")]),
+    );
+
+    expect(messageTexts(messages)).toContain("Bank จ่าย 100.00");
+
+    const rows = await sql<{ user_id: string; paid: boolean }[]>`
+      SELECT user_id, paid FROM bill_shares WHERE bill_id = ${bill[0]!.id} ORDER BY user_id
+    `;
+    expect(rows.filter((row) => row.paid).map((row) => row.user_id)).toEqual([other.user.id]);
   });
 
   it("ข้อมูลไม่ครบจะไม่สร้างรายการค้างไว้", async () => {

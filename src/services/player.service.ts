@@ -13,6 +13,8 @@ import type { GamePlayerRow, GameRow } from "@/repositories/types";
 export type PlayerCountResult = {
   game: GameRow;
   joinedCount: number;
+  /** จำนวนครั้งที่คนนี้เปลี่ยนใจในรอบนี้ ลงชื่อครั้งแรกคือ 0 */
+  changeCount: number;
 };
 
 /**
@@ -39,8 +41,8 @@ export async function joinGame(
       });
     }
 
-    await joinPlayer(game.id, userId, tx);
-    return { game, joinedCount: joinedCount + 1 };
+    const changeCount = await joinPlayer(game.id, userId, tx);
+    return { game, joinedCount: joinedCount + 1, changeCount };
   }) as Promise<PlayerCountResult>;
 }
 
@@ -57,9 +59,9 @@ export async function leaveGame(
     const status = await findPlayerStatus(game.id, userId, tx);
     if (status !== "joined") throw new AppError("NOT_JOINED");
 
-    await cancelPlayer(game.id, userId, tx);
+    const changeCount = await cancelPlayer(game.id, userId, tx);
     const joinedCount = await countJoinedPlayers(game.id, tx);
-    return { game, joinedCount };
+    return { game, joinedCount, changeCount };
   }) as Promise<PlayerCountResult>;
 }
 

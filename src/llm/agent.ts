@@ -12,6 +12,7 @@ import {
   type SessionMessage,
 } from "@/repositories/session.repository";
 import type { UserRow } from "@/repositories/types";
+import { findBillContext } from "@/services/bill.service";
 import { buildSystemPrompt } from "./system-prompt";
 import { executeTool, type ToolContext } from "./tool-executor";
 import { toolDeclarations } from "./tools";
@@ -39,7 +40,7 @@ function toContents(history: SessionMessage[], userText: string): Content[] {
   ];
 }
 
-async function buildPromptContext(lineGroupId: string, user: UserRow) {
+async function buildGameContext(lineGroupId: string, user: UserRow) {
   const game = await findOpenGame(lineGroupId);
   if (!game) return null;
 
@@ -66,14 +67,16 @@ export async function runAgent(input: AgentInput): Promise<LineMessage[]> {
   const attachments: LineMessage[] = [];
 
   try {
-    const [history, openGame] = await Promise.all([
+    const [history, openGame, openBill] = await Promise.all([
       loadSessionMessages(input.lineGroupId, input.lineUserId),
-      buildPromptContext(input.lineGroupId, input.user),
+      buildGameContext(input.lineGroupId, input.user),
+      findBillContext(input.lineGroupId, input.user.id),
     ]);
 
     const systemInstruction = buildSystemPrompt({
       displayName: input.user.display_name,
       openGame,
+      openBill,
       ...(input.now ? { now: input.now } : {}),
     });
 
