@@ -233,6 +233,36 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
     expect(messageTexts(messages)).toContain("ลองเลือกคำสั่งด้านล่าง");
   });
 
+  it("ส่ง content ของ model กลับไปทั้งก้อน (thoughtSignature ของ Gemini 3)", async () => {
+    const user = await newUser();
+    const recorded: Recorded[] = [];
+
+    // Gemini 3 บังคับว่า functionCall ที่ส่งกลับต้องมี thoughtSignature ติดไปด้วย
+    // ถ้าเราประกอบ part ขึ้นใหม่เอง จะโดนปฏิเสธ 400 (เจอจากการทดสอบกับของจริง)
+    const modelContent = {
+      role: "model",
+      parts: [
+        {
+          functionCall: { name: "get_open_game", args: {} },
+          thoughtSignature: "signature-from-gemini",
+        },
+      ],
+    };
+
+    const client: GeminiClient = {
+      async generate({ systemInstruction, contents }) {
+        recorded.push({ systemInstruction, contents: [...contents] });
+        return recorded.length === 1
+          ? { text: "", calls: [{ name: "get_open_game", args: {} }], content: modelContent }
+          : say("ยังไม่มีรอบเปิดอยู่นะ");
+      },
+    };
+
+    await run(user, "มีรอบไหม", client);
+
+    expect(JSON.stringify(recorded[1]?.contents ?? [])).toContain("signature-from-gemini");
+  });
+
   it("จำบทสนทนาไว้ต่อรอบถัดไป", async () => {
     const user = await newUser();
     const recorded: Recorded[] = [];

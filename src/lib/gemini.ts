@@ -15,6 +15,12 @@ export type GeminiCall = {
 export type GeminiTurn = {
   text: string;
   calls: GeminiCall[];
+  /**
+   * Content ดิบของฝั่ง model
+   * ต้องส่งกลับไปทั้งก้อนในรอบถัดไป เพราะ Gemini 3 บังคับให้มี thoughtSignature ติดไปกับ functionCall
+   * ถ้าประกอบ part ขึ้นใหม่เองจะโดนปฏิเสธ 400 (ทดสอบจริง 2026-09-16)
+   */
+  content?: Content;
 };
 
 /** แยก interface ไว้เพื่อให้เทสสลับตัวปลอมเข้ามาได้โดยไม่ต้องยิง Gemini จริง */
@@ -42,9 +48,14 @@ export function createGeminiClient(): GeminiClient {
           automaticFunctionCalling: { disable: true },
           temperature: TEMPERATURE,
           maxOutputTokens: MAX_OUTPUT_TOKENS,
+          // ปิดโหมดคิดยาว วัดจริงแล้วต่างกันมาก (53 วินาที → 1.4 วินาที)
+          // งานนี้แค่ตีความประโยคสั้น ๆ ไม่ต้องใช้การคิดหลายชั้น และ replyToken ของ LINE รอไม่ได้
+          thinkingConfig: { thinkingBudget: 0 },
           abortSignal: AbortSignal.timeout(GEMINI_TIMEOUT_MS),
         },
       });
+
+      const content = response.candidates?.[0]?.content;
 
       return {
         text: response.text ?? "",
@@ -52,6 +63,7 @@ export function createGeminiClient(): GeminiClient {
           name: call.name ?? "",
           args: (call.args ?? {}) as Record<string, unknown>,
         })),
+        ...(content ? { content } : {}),
       };
     },
   };

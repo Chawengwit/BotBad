@@ -68,7 +68,13 @@ export function getDatabaseSchema(): string {
   return parsed.data;
 }
 
-const geminiModelSchema = z.string().trim().min(1).default("gemini-2.5-flash");
+/**
+ * เลือกจากการวัดจริง (2026-09-16): ตอบ ~1 วินาที เรียก tool ถูกต้อง
+ * และโควตา Free tier สูงกว่า gemini-3.6-flash ซึ่งจำกัด 5 คำขอต่อนาที
+ */
+export const DEFAULT_GEMINI_MODEL = "gemini-3.1-flash-lite";
+
+const geminiModelSchema = z.string().trim().min(1).default(DEFAULT_GEMINI_MODEL);
 
 export type GeminiConfig = { apiKey: string; model: string };
 
@@ -78,7 +84,7 @@ export function getGeminiConfigOrNull(): GeminiConfig | null {
   if (!apiKey) return null;
 
   const model = geminiModelSchema.safeParse(process.env.GEMINI_MODEL ?? undefined);
-  return { apiKey, model: model.success ? model.data : "gemini-2.5-flash" };
+  return { apiKey, model: model.success ? model.data : DEFAULT_GEMINI_MODEL };
 }
 
 export function getGeminiConfig(): GeminiConfig {

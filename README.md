@@ -83,7 +83,7 @@ npm run dev                  # http://localhost:3000/api/line/webhook
 | `DATABASE_URL` | ✅ ต่อ Supabase (transaction pooler port 6543) |
 | `DB_SCHEMA` | ไม่บังคับ ค่าเริ่มต้น `public` ใช้ `bot_test` ตอนรันเทส |
 | `GEMINI_API_KEY` | ✅ ภาษาธรรมชาติ (ไม่ใส่ก็ใช้บอทได้ แต่จะตอบเป็นเมนูปุ่มแทน) |
-| `GEMINI_MODEL` | ไม่บังคับ ค่าเริ่มต้น `gemini-2.5-flash` |
+| `GEMINI_MODEL` | ไม่บังคับ ค่าเริ่มต้น `gemini-3.1-flash-lite` |
 
 ห้าม commit ค่าจริง ใส่ใน `.env.local` (ถูก gitignore ไว้แล้ว) และใน Vercel เท่านั้น
 

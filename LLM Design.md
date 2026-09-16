@@ -67,7 +67,8 @@ Postback ไม่เรียก LLM เด็ดขาด
 | Timeout ต่อการเรียก Gemini | 8 วินาที |
 | `temperature` | 0.2 |
 | `maxOutputTokens` | 512 |
-| Model | `GEMINI_MODEL` ค่าเริ่มต้น `gemini-2.5-flash` |
+| Model | `GEMINI_MODEL` ค่าเริ่มต้น `gemini-3.1-flash-lite` (Free tier ของ `gemini-3.6-flash` จำกัด 5 คำขอ/นาที) |
+| `thinkingConfig.thinkingBudget` | 0 (ปิดโหมดคิดยาว วัดจริง 53 วินาที → 1.4 วินาที) |
 | History ที่ส่ง | 10 ข้อความล่าสุด |
 | ความยาวข้อความจาก User | ตัดที่ 500 ตัวอักษร |
 | ความยาวข้อความตอบ | ตัดที่ 1,000 ตัวอักษร |

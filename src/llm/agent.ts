@@ -92,10 +92,13 @@ export async function runAgent(input: AgentInput): Promise<LineMessage[]> {
         break;
       }
 
-      contents.push({
-        role: "model",
-        parts: turn.calls.map((call) => ({ functionCall: { name: call.name, args: call.args } })),
-      });
+      // ส่ง content ดิบกลับไปทั้งก้อน เพื่อให้ thoughtSignature ของ Gemini 3 ติดไปด้วย
+      contents.push(
+        turn.content ?? {
+          role: "model",
+          parts: turn.calls.map((call) => ({ functionCall: { name: call.name, args: call.args } })),
+        },
+      );
 
       const outcomes = [];
       for (const call of turn.calls) {
