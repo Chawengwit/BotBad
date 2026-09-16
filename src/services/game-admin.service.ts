@@ -1,0 +1,172 @@
+import { z } from "zod";
+import { AppError } from "@/errors/app-errors";
+import { getSql, type Sql } from "@/lib/db";
+import { DATE_PATTERN, isInThePast, TIME_PATTERN } from "@/lib/time";
+import { countJoinedPlayers, findOpenGame, updateGame, updateGameStatus } from "@/repositories/game.repository";
+import { lockOpenGame } from "@/repositories/player.repository";
+import {
+  consumePendingAction,
+  createPendingAction,
+  type PendingActionRow,
+  type PendingActionType,
+} from "@/repositories/pending-action.repository";
+import type { GameRow } from "@/repositories/types";
+
+/**
+ * งานของเจ้าของรอบ: แก้ไข ยกเลิก ปิดรอบ (spec §15–§17)
+ * ทุกอย่างต้องเป็นผู้สร้างรอบ และต้องกดยืนยันก่อนเสมอ
+ */
+
+export const editPatchSchema = z
+  .object({
+    court_count: z.number().int().min(1).max(4),
+    play_date: z.string().regex(DATE_PATTERN),
+    start_time: z.string().regex(TIME_PATTERN),
+    duration_minutes: z.number().int().positive().multipleOf(60),
+  })
+  .partial();
+
+export type EditPatch = z.infer<typeof editPatchSchema>;
+
+export type GameWithCount = {
+  game: GameRow;
+  joinedCount: number;
+};
+
+/** หา รอบที่เปิดอยู่ พร้อมตรวจว่าคนสั่งเป็นผู้สร้าง */
+async function requireOwnedGame(lineGroupId: string, userId: string): Promise<GameWithCount> {
+  const game = await findOpenGame(lineGroupId);
+  if (!game) throw new AppError("NO_OPEN_GAME");
+  if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
+
+  return { game, joinedCount: await countJoinedPlayers(game.id) };
+}
+
+async function startOwnerAction(
+  lineGroupId: string,
+  userId: string,
+  actionType: PendingActionType,
+): Promise<{ pending: PendingActionRow } & GameWithCount> {
+  const owned = await requireOwnedGame(lineGroupId, userId);
+
+  const pending = await createPendingAction({
+    lineGroupId,
+    requestedBy: userId,
+    actionType,
+    gameId: owned.game.id,
+    payload: {},
+  });
+
+  return { pending, ...owned };
+}
+
+export function startEditGame(lineGroupId: string, userId: string) {
+  return startOwnerAction(lineGroupId, userId, "edit_game");
+}
+
+export function startCancelGame(lineGroupId: string, userId: string) {
+  return startOwnerAction(lineGroupId, userId, "cancel_game");
+}
+
+export function startCloseGame(lineGroupId: string, userId: string) {
+  return startOwnerAction(lineGroupId, userId, "close_game");
+}
+
+/** ค่าที่จะเปลี่ยนต้องไม่ทำให้ที่นั่งไม่พอ และต้องไม่ย้อนอดีต (spec §15) */
+export function validatePatch(game: GameRow, patch: EditPatch, joinedCount: number): void {
+  if (Object.keys(patch).length === 0) throw new AppError("NO_CHANGES");
+
+  if (patch.court_count !== undefined) {
+    const newMax = patch.court_count * 8;
+    if (joinedCount > newMax) {
+      throw new AppError("COURT_TOO_SMALL", {
+        current_players: joinedCount,
+        new_court_count: patch.court_count,
+        new_max_players: newMax,
+      });
+    }
+  }
+
+  const playDate = patch.play_date ?? game.play_date;
+  const startTime = patch.start_time ?? game.start_time;
+  if (isInThePast(playDate, startTime)) throw new AppError("DATE_IN_PAST");
+}
+
+function ensureOwner(pending: PendingActionRow, game: GameRow | null, userId: string): GameRow {
+  if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
+  if (!game) throw new AppError("NO_OPEN_GAME");
+  if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
+  return game;
+}
+
+/** ยืนยันการแก้ไข ตรวจซ้ำอีกรอบเพราะจำนวนคนอาจเปลี่ยนไปแล้ว */
+export async function applyEditGame(
+  pendingId: string,
+  lineGroupId: string,
+  userId: string,
+  sql: Sql = getSql(),
+): Promise<GameWithCount> {
+  return sql.begin(async (tx) => {
+    const pending = await consumePendingAction(pendingId, lineGroupId, tx);
+    if (!pending || pending.action_type !== "edit_game") throw new AppError("PENDING_EXPIRED");
+
+    const game = ensureOwner(pending, await lockOpenGame(lineGroupId, tx), userId);
+
+    const parsed = editPatchSchema.safeParse(pending.payload);
+    if (!parsed.success) throw new AppError("NO_CHANGES");
+
+    const joinedCount = await countJoinedPlayers(game.id, tx);
+    validatePatch(game, parsed.data, joinedCount);
+
+    const updated = await updateGame(
+      game.id,
+      {
+        courtCount: parsed.data.court_count,
+        playDate: parsed.data.play_date,
+        startTime: parsed.data.start_time,
+        durationMinutes: parsed.data.duration_minutes,
+      },
+      tx,
+    );
+
+    return { game: updated, joinedCount };
+  }) as Promise<GameWithCount>;
+}
+
+async function applyStatusChange(
+  pendingId: string,
+  lineGroupId: string,
+  userId: string,
+  actionType: "cancel_game" | "close_game",
+  status: "cancelled" | "completed",
+  sql: Sql,
+): Promise<GameWithCount> {
+  return sql.begin(async (tx) => {
+    const pending = await consumePendingAction(pendingId, lineGroupId, tx);
+    if (!pending || pending.action_type !== actionType) throw new AppError("PENDING_EXPIRED");
+
+    const game = ensureOwner(pending, await lockOpenGame(lineGroupId, tx), userId);
+    const joinedCount = await countJoinedPlayers(game.id, tx);
+
+    await updateGameStatus(game.id, status, tx);
+    return { game, joinedCount };
+  }) as Promise<GameWithCount>;
+}
+
+export function applyCancelGame(
+  pendingId: string,
+  lineGroupId: string,
+  userId: string,
+  sql: Sql = getSql(),
+): Promise<GameWithCount> {
+  return applyStatusChange(pendingId, lineGroupId, userId, "cancel_game", "cancelled", sql);
+}
+
+export function applyCloseGame(
+  pendingId: string,
+  lineGroupId: string,
+  userId: string,
+  sql: Sql = getSql(),
+): Promise<GameWithCount> {
+  return applyStatusChange(pendingId, lineGroupId, userId, "close_game", "completed", sql);
+}

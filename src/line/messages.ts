@@ -1,7 +1,9 @@
 import type { ErrorCode } from "@/errors/app-errors";
 import type { ButtonsMessage, LineMessage, MessageAction, TextMessage } from "@/lib/line";
-import { formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
+import { formatDuration, formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
+import type { PendingActionType } from "@/repositories/pending-action.repository";
 import type { GameDraft } from "@/services/game.service";
+import type { EditPatch } from "@/services/game-admin.service";
 import type { GameRow } from "@/repositories/types";
 
 export const WIZARD_TIME_CHOICES = ["18:00", "19:00", "20:00"] as const;
@@ -98,6 +100,27 @@ export function askDuration(pendingId: string): ButtonsMessage {
   );
 }
 
+function confirmActions(
+  pendingId: string,
+  confirmLabel: string,
+  rejectLabel = "❌ ยกเลิก",
+): MessageAction[] {
+  return [
+    {
+      type: "postback",
+      label: confirmLabel,
+      displayText: confirmLabel,
+      data: new URLSearchParams({ action: "confirm", pending_id: pendingId }).toString(),
+    },
+    {
+      type: "postback",
+      label: rejectLabel,
+      displayText: rejectLabel,
+      data: new URLSearchParams({ action: "reject", pending_id: pendingId }).toString(),
+    },
+  ];
+}
+
 export function confirmCreateGame(pendingId: string, draft: GameDraft): ButtonsMessage {
   const summary = [
     "🏸 เปิดตีแบด",
@@ -108,20 +131,7 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): ButtonsM
     "ยืนยันไหม?",
   ].join("\n");
 
-  return buttons("ยืนยันเปิดรอบตี?", summary, [
-    {
-      type: "postback",
-      label: "✅ เปิดตี",
-      displayText: "✅ เปิดตี",
-      data: new URLSearchParams({ action: "confirm", pending_id: pendingId }).toString(),
-    },
-    {
-      type: "postback",
-      label: "❌ ยกเลิก",
-      displayText: "❌ ยกเลิก",
-      data: new URLSearchParams({ action: "reject", pending_id: pendingId }).toString(),
-    },
-  ]);
+  return buttons("ยืนยันเปิดรอบตี?", summary, confirmActions(pendingId, "✅ เปิดตี"));
 }
 
 const GAME_ACTIONS: MessageAction[] = [
@@ -159,6 +169,105 @@ export function playerList(game: GameRow, players: { display_name: string }[]): 
       ...(names.length > 0 ? names : ["ยังไม่มีคนลงชื่อ"]),
     ].join("\n"),
   );
+}
+
+export function editMenu(pendingId: string): ButtonsMessage {
+  return buttons(
+    "แก้ไขรอบตี",
+    "✏️ ต้องการแก้ไขอะไร?",
+    [
+      { label: "🏟️ จำนวนคอร์ท", value: "court" },
+      { label: "📅 วันที่", value: "date" },
+      { label: "⏰ เวลา", value: "time" },
+      { label: "⏱️ ระยะเวลา", value: "duration" },
+    ].map((choice) => ({
+      type: "postback" as const,
+      label: choice.label,
+      displayText: choice.label,
+      data: wizardData(pendingId, "field", choice.value),
+    })),
+  );
+}
+
+function changeLines(game: GameRow, patch: EditPatch): string[] {
+  const lines: string[] = [];
+
+  if (patch.court_count !== undefined) {
+    lines.push(`🏟️ ${game.court_count} → ${patch.court_count} คอร์ท`);
+    lines.push(`👥 รับ ${game.max_players} → ${patch.court_count * 8} คน`);
+  }
+  if (patch.play_date !== undefined) {
+    lines.push(`📅 ${formatThaiDate(game.play_date)} → ${formatThaiDate(patch.play_date)}`);
+  }
+  if (patch.start_time !== undefined) {
+    lines.push(`⏰ ${game.start_time} → ${patch.start_time}`);
+  }
+  if (patch.duration_minutes !== undefined) {
+    lines.push(
+      `⏱️ ${formatDuration(game.duration_minutes)} → ${formatDuration(patch.duration_minutes)}`,
+    );
+  }
+
+  return lines;
+}
+
+export function confirmEditGame(
+  pendingId: string,
+  game: GameRow,
+  patch: EditPatch,
+): ButtonsMessage {
+  return buttons(
+    "ยืนยันการแก้ไข?",
+    ["✏️ ยืนยันการแก้ไข?", ...changeLines(game, patch)].join("\n"),
+    confirmActions(pendingId, "✅ ยืนยัน"),
+  );
+}
+
+export function confirmCancelGame(
+  pendingId: string,
+  game: GameRow,
+  joinedCount: number,
+): ButtonsMessage {
+  return buttons(
+    "ยืนยันยกเลิกรอบตี?",
+    [
+      "⚠️ ยืนยันการยกเลิกรอบตี?",
+      gameSummary(game),
+      `👥 ${joinedCount}/${game.max_players} คน`,
+    ].join("\n"),
+    confirmActions(pendingId, "❌ ยืนยันยกเลิก", "กลับ"),
+  );
+}
+
+export function confirmCloseGame(
+  pendingId: string,
+  game: GameRow,
+  joinedCount: number,
+): ButtonsMessage {
+  return buttons(
+    "ปิดรอบตี?",
+    ["🏁 ปิดรอบตีนี้?", gameSummary(game), `👥 ${joinedCount}/${game.max_players} คน`].join("\n"),
+    confirmActions(pendingId, "✅ ปิดรอบ", "กลับ"),
+  );
+}
+
+export function gameCancelled(): TextMessage {
+  return text('🚫 ยกเลิกรอบตีเรียบร้อย\n\nเปิดรอบใหม่ได้ด้วย "บอทจ๋า เปิดตี"');
+}
+
+export function gameClosed(): TextMessage {
+  return text('🏁 ปิดรอบเรียบร้อย ขอบคุณทุกคนที่มาตีนะ 🏸\n\nเปิดรอบใหม่ได้ด้วย "บอทจ๋า เปิดตี"');
+}
+
+export function actionRejected(actionType: PendingActionType): TextMessage {
+  switch (actionType) {
+    case "create_game":
+      return text("ยกเลิกแล้ว ไม่ได้เปิดรอบตีนะ");
+    case "edit_game":
+      return text("ไม่ได้แก้อะไร รอบตียังเหมือนเดิม");
+    default:
+      return text("ไม่ได้ทำอะไรต่อ รอบตียังเปิดอยู่เหมือนเดิม");
+  }
 }
 
 export function gameSummary(game: GameRow): string {
@@ -201,7 +310,18 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
     case "NOT_REQUESTER":
       return text("⛔ เฉพาะคนที่สั่งเท่านั้นที่กดปุ่มนี้ได้");
     case "NOT_GAME_CREATOR":
-      return text("⛔ คุณไม่มีสิทธิ์แก้ไขรอบตีนี้");
+      return text("⛔ เฉพาะคนที่เปิดรอบเท่านั้นที่แก้ไข ยกเลิก หรือปิดรอบได้");
+    case "COURT_TOO_SMALL":
+      return text(
+        [
+          `❌ ไม่สามารถลดเหลือ ${details.new_court_count} คอร์ทได้`,
+          "",
+          `ขณะนี้มีผู้เล่น ${details.current_players} คน`,
+          `แต่ ${details.new_court_count} คอร์ทรองรับได้ ${details.new_max_players} คน`,
+        ].join("\n"),
+      );
+    case "NO_CHANGES":
+      return text("ℹ️ ไม่มีอะไรเปลี่ยนแปลง");
     case "MISSING_FIELDS":
       return text("ℹ️ ข้อมูลยังไม่ครบ ลองเริ่มใหม่ด้วย “บอทจ๋า เปิดตี”");
     default:

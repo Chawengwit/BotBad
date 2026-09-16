@@ -2,26 +2,48 @@ import { z } from "zod";
 import { AppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
 import { addDays, DATE_PATTERN, TIME_PATTERN, todayInBangkok } from "@/lib/time";
-import { confirmCreateGame, gameCard, text, wizardPrompt } from "@/line/messages";
-import type { UserRow } from "@/repositories/types";
-import { doJoin, doLeave, doList } from "./game-actions";
+import {
+  actionRejected,
+  askCourtCount,
+  askDate,
+  askDuration,
+  askTime,
+  confirmCreateGame,
+  confirmEditGame,
+  gameCancelled,
+  gameCard,
+  gameClosed,
+  wizardPrompt,
+} from "@/line/messages";
+import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
 import {
   expirePendingAction,
   findUsablePendingAction,
   updatePendingPayload,
+  type PendingActionRow,
 } from "@/repositories/pending-action.repository";
+import type { UserRow } from "@/repositories/types";
+import {
+  applyCancelGame,
+  applyCloseGame,
+  applyEditGame,
+  editPatchSchema,
+  validatePatch,
+} from "@/services/game-admin.service";
 import {
   confirmCreateGame as confirmCreateGameService,
   gameDraftSchema,
   missingDraftFields,
 } from "@/services/game.service";
+import { doJoin, doLeave, doList } from "./game-actions";
 
 /** ข้อมูลที่แนบมากับปุ่ม เป็น query string และต้อง validate ทุกครั้ง (spec §18) */
 const postbackSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("wizard"),
     pending_id: z.uuid(),
-    step: z.enum(["court", "date", "time", "duration"]),
+    // field = เลือกว่าจะแก้อะไร (เฉพาะตอนแก้ไขรอบ) ที่เหลือคือค่าที่เลือกมา
+    step: z.enum(["field", "court", "date", "time", "duration"]),
     value: z.string().min(1).max(40),
   }),
   z.object({ action: z.literal("confirm"), pending_id: z.uuid() }),
@@ -35,6 +57,8 @@ const postbackSchema = z.discriminatedUnion("action", [
 export type PostbackParams = { date?: string; time?: string };
 export type PostbackData = z.infer<typeof postbackSchema>;
 
+type DraftStep = "court" | "date" | "time" | "duration";
+
 export function parsePostbackData(data: string): PostbackData | null {
   const parsed = postbackSchema.safeParse(Object.fromEntries(new URLSearchParams(data)));
   return parsed.success ? parsed.data : null;
@@ -42,7 +66,7 @@ export function parsePostbackData(data: string): PostbackData | null {
 
 /** แปลงค่าที่กดมาเป็นค่าที่จะเก็บลง payload */
 function draftValue(
-  step: "court" | "date" | "time" | "duration",
+  step: DraftStep,
   value: string,
   params: PostbackParams,
   today: string,
@@ -74,9 +98,71 @@ function draftValue(
   }
 }
 
+/** คำถามของแต่ละช่อง ใช้ทั้งตอนเปิดรอบและตอนแก้ไข */
+function questionFor(step: string, pendingId: string): LineMessage {
+  switch (step) {
+    case "court":
+      return askCourtCount(pendingId);
+    case "date":
+      return askDate(pendingId);
+    case "time":
+      return askTime(pendingId);
+    case "duration":
+      return askDuration(pendingId);
+    default:
+      throw new AppError("INTERNAL_ERROR");
+  }
+}
+
+async function handleConfirm(
+  pending: PendingActionRow,
+  lineGroupId: string,
+  userId: string,
+): Promise<LineMessage[]> {
+  switch (pending.action_type) {
+    case "create_game": {
+      const game = await confirmCreateGameService(pending.id, lineGroupId, userId);
+      return [gameCard(game, 0, "🏸 เปิดรอบตีแล้ว")];
+    }
+    case "edit_game": {
+      const { game, joinedCount } = await applyEditGame(pending.id, lineGroupId, userId);
+      return [gameCard(game, joinedCount, "✏️ แก้ไขรอบเรียบร้อย")];
+    }
+    case "cancel_game": {
+      await applyCancelGame(pending.id, lineGroupId, userId);
+      return [gameCancelled()];
+    }
+    case "close_game": {
+      await applyCloseGame(pending.id, lineGroupId, userId);
+      return [gameClosed()];
+    }
+  }
+}
+
+/** แก้ไขทีละช่อง เลือกค่าเสร็จก็ไปการ์ดยืนยันเลย */
+async function handleEditStep(
+  pending: PendingActionRow,
+  lineGroupId: string,
+  field: string,
+  value: number | string,
+): Promise<LineMessage[]> {
+  const patch = editPatchSchema.parse({ [field]: value });
+
+  const game = await findOpenGame(lineGroupId);
+  if (!game) throw new AppError("NO_OPEN_GAME");
+
+  // ตรวจตั้งแต่ตอนนี้ จะได้ไม่ให้กดยืนยันไปแล้วค่อยบอกว่าไม่ได้
+  validatePatch(game, patch, await countJoinedPlayers(game.id));
+
+  const updated = await updatePendingPayload(pending.id, { [field]: value });
+  if (!updated) throw new AppError("PENDING_EXPIRED");
+
+  return [confirmEditGame(pending.id, game, patch)];
+}
+
 /**
  * จัดการปุ่มที่ผู้ใช้กด
- * ทุกปุ่มต้องเป็นของคนที่สั่งเท่านั้น และใช้ได้เฉพาะรายการที่ยังไม่หมดอายุ (spec §21)
+ * ทุกปุ่มที่อ้าง pending action ต้องเป็นของคนที่สั่งเท่านั้น และใช้ได้เฉพาะที่ยังไม่หมดอายุ (spec §21)
  */
 export async function handlePostback(
   parsed: PostbackData,
@@ -92,33 +178,36 @@ export async function handlePostback(
   if (parsed.action === "leave") return doLeave(input.lineGroupId, input.user);
   if (parsed.action === "list") return doList(input.lineGroupId);
 
-  if (parsed.action === "reject") {
-    const pending = await findUsablePendingAction(parsed.pending_id, input.lineGroupId);
-    if (!pending) throw new AppError("PENDING_EXPIRED");
-    if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
-
-    await expirePendingAction(parsed.pending_id, input.lineGroupId);
-    return [text("ยกเลิกแล้ว ไม่ได้เปิดรอบตีนะ")];
-  }
-
-  if (parsed.action === "confirm") {
-    const game = await confirmCreateGameService(parsed.pending_id, input.lineGroupId, userId);
-    return [gameCard(game, 0, "🏸 เปิดรอบตีแล้ว")];
-  }
-
   const pending = await findUsablePendingAction(parsed.pending_id, input.lineGroupId);
   if (!pending) throw new AppError("PENDING_EXPIRED");
   if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
 
-  const { field, value } = draftValue(parsed.step, parsed.value, input.params, todayInBangkok());
-  const payload = { ...pending.payload, [field]: value };
+  if (parsed.action === "reject") {
+    await expirePendingAction(pending.id, input.lineGroupId);
+    return [actionRejected(pending.action_type)];
+  }
 
-  const updated = await updatePendingPayload(parsed.pending_id, payload);
+  if (parsed.action === "confirm") {
+    return handleConfirm(pending, input.lineGroupId, userId);
+  }
+
+  if (parsed.step === "field") {
+    if (pending.action_type !== "edit_game") throw new AppError("INTERNAL_ERROR");
+    return [questionFor(parsed.value, pending.id)];
+  }
+
+  const { field, value } = draftValue(parsed.step, parsed.value, input.params, todayInBangkok());
+
+  if (pending.action_type === "edit_game") {
+    return handleEditStep(pending, input.lineGroupId, field, value);
+  }
+
+  const payload = { ...pending.payload, [field]: value };
+  const updated = await updatePendingPayload(pending.id, payload);
   if (!updated) throw new AppError("PENDING_EXPIRED");
 
   const missing = missingDraftFields(payload);
-  if (missing.length > 0) return [wizardPrompt(parsed.pending_id, payload, missing)];
+  if (missing.length > 0) return [wizardPrompt(pending.id, payload, missing)];
 
-  const draft = gameDraftSchema.parse(payload);
-  return [confirmCreateGame(parsed.pending_id, draft)];
+  return [confirmCreateGame(pending.id, gameDraftSchema.parse(payload))];
 }
