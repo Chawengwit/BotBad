@@ -1,6 +1,12 @@
 import { getSql, type Queryable } from "@/lib/db";
 
-export type PendingActionType = "create_game" | "edit_game" | "cancel_game" | "close_game";
+export type PendingActionType =
+  | "create_game"
+  | "edit_game"
+  | "cancel_game"
+  | "close_game"
+  | "create_bill"
+  | "cancel_bill";
 
 /** payload เก็บลง jsonb จึงรับได้เฉพาะค่าที่แปลงเป็น JSON ได้ */
 export type PendingPayload = Record<string, string | number | boolean | null>;

@@ -136,6 +136,10 @@ async function runConfirm(
       await applyCloseGame(pending.id, lineGroupId, userId);
       return [gameClosed()];
     }
+    case "create_bill":
+    case "cancel_bill":
+      // ยังไม่มีทางไหนสร้าง pending สองชนิดนี้ ต่อของจริงในขั้นถัดไปของ PRP §16
+      throw new AppError("INTERNAL_ERROR");
   }
 }
 

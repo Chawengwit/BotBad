@@ -13,6 +13,11 @@ export type ErrorCode =
   | "MISSING_FIELDS"
   | "PENDING_EXPIRED"
   | "NOT_REQUESTER"
+  | "NO_BILL"
+  | "BILL_ALREADY_EXISTS"
+  | "NOT_IN_BILL"
+  | "NO_PLAYERS_TO_SPLIT"
+  | "AMOUNT_INVALID"
   | "INTERNAL_ERROR";
 
 export class AppError extends Error {

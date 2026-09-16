@@ -566,8 +566,8 @@ db/migrations/009_alter_pending_action_types.sql
 
 ```text
 1. Migration 007 (promptpay) + wizard สร้าง/แก้รอบ + LLM params   ← ✅ ทำแล้ว
-2. Migration 008-009
-3. Service คำนวณ + repository (ทดสอบการหารให้จบก่อนแตะ LINE)
+2. Migration 008-009   ← ✅ ทำแล้ว
+3. Service คำนวณ + repository (ทดสอบการหารให้จบก่อนแตะ LINE)   ← ✅ ทำแล้ว
 4. การ์ดบิล + ข้อความทั้งหมด
 5. Rule-based: คิดเงิน / บิล / ใครยังไม่จ่าย / จ่ายแล้ว / ยังไม่จ่าย
 6. ต่อ wizard เข้ากับ pending_actions + postback ที่มีอยู่

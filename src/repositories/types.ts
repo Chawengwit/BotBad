@@ -36,6 +36,34 @@ export type GameRow = {
   promptpay: string | null;
 };
 
+export type BillStatus = "sent" | "cancelled";
+
+/** หนึ่งรายการในบิล เช่น ค่าคอร์ท หรือ ลูกแบด 4 ลูก ลูกละ 25 บาท */
+export type BillItem = {
+  label: string;
+  quantity: number;
+  unit_price_satang: number;
+  amount_satang: number;
+};
+
+export type BillRow = {
+  id: string;
+  game_id: string;
+  created_by: string;
+  status: BillStatus;
+  items: BillItem[];
+  total_satang: number;
+};
+
+export type BillShareRow = {
+  id: string;
+  bill_id: string;
+  user_id: string;
+  amount_satang: number;
+  paid: boolean;
+  display_name: string;
+};
+
 export type PlayerStatus = "joined" | "cancelled";
 
 export type GamePlayerRow = {
