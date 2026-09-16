@@ -1346,6 +1346,8 @@ POST /api/line/webhook
 Responsibilities:
 
 1. Verify LINE signature (`x-line-signature`) ด้วย raw body
+   - ไม่มี header → ตอบ 401 ตั้งแต่ก่อนอ่าน body
+   - body ใหญ่เกิน 1 MB → ตอบ 413 (endpoint นี้เปิดสาธารณะ ใครยิงอะไรมาก็ได้)
 2. Parse และ validate event
 3. รับเฉพาะ event:
    - `message` (type `text`)
