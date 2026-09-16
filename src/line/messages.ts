@@ -2,6 +2,7 @@ import type { ErrorCode } from "@/errors/app-errors";
 import type { ButtonsMessage, LineMessage, MessageAction, TextMessage } from "@/lib/line";
 import { formatDuration, formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
 import type { PendingActionType } from "@/repositories/pending-action.repository";
+import { WAKE_WORD } from "@/router/wake-word";
 import { MAX_PLAYERS, MIN_PLAYERS, type GameDraft } from "@/services/game.service";
 import type { EditPatch } from "@/services/game-admin.service";
 import type { GameRow } from "@/repositories/types";
@@ -147,6 +148,24 @@ export function askLocation(pendingId: string): TextMessage {
     "📍 มีลิงก์แผนที่ไหม?\n\nวางลิงก์ Google Maps หรือกดแชร์ตำแหน่งมาก็ได้ ถ้าไม่มีก็กดข้ามได้เลย",
     [{ label: "ข้าม", data: wizardData(pendingId, "location", "skip") }],
   );
+}
+
+/** ใช้เมื่อ Gemini ล่ม โควตาหมด หรือยังไม่ได้ตั้งค่า (LLM Design §9) */
+export function fallbackMenu(): TextMessage {
+  return {
+    type: "text",
+    text: "🤔 ตอนนี้ผมยังไม่เข้าใจประโยคนี้\n\nลองเลือกคำสั่งด้านล่างได้เลย",
+    quickReply: {
+      items: ["เปิดตี", "ลงชื่อ", "ถอนชื่อ", "ใครตีบ้าง"].map((command) => ({
+        type: "action" as const,
+        action: {
+          type: "message" as const,
+          label: command,
+          text: `${WAKE_WORD} ${command}`,
+        },
+      })),
+    },
+  };
 }
 
 export function askAgain(message: string): TextMessage {

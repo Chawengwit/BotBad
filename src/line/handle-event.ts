@@ -1,4 +1,8 @@
 import { isAppError } from "@/errors/app-errors";
+import { getGeminiConfigOrNull } from "@/lib/env";
+import { createGeminiClient } from "@/lib/gemini";
+import { runAgent } from "@/llm/agent";
+import { clearSession } from "@/repositories/session.repository";
 import type { LineMessage } from "@/lib/line";
 import { formatErrorForLog } from "@/lib/log";
 import { handlePostback, parsePostbackData } from "@/router/postback";
@@ -6,7 +10,7 @@ import { handleRuleCommand, isRuleCommand, stripWakeWord } from "@/router/rule-c
 import { handleTextAnswer } from "@/router/text-answer";
 import { hasWakeWord, WAKE_WORD } from "@/router/wake-word";
 import { ensureUser } from "@/services/user.service";
-import { errorMessage, text } from "./messages";
+import { errorMessage, fallbackMenu, text } from "./messages";
 import type { LineEvent } from "./webhook-schema";
 
 export type ReplyFn = (replyToken: string, messages: LineMessage[]) => Promise<void>;
@@ -96,12 +100,31 @@ async function resolveMessages(
 
   if (isText && hasWakeWord(messageText)) {
     const command = stripWakeWord(messageText);
-    // คำสั่งที่ยังไม่รองรับจะเงียบไว้ก่อน จนกว่าจะต่อ LLM (spec §19)
-    if (!isRuleCommand(command)) return null;
+
+    if (isRuleCommand(command)) {
+      return runOrExplain(async () => {
+        const user = await ensureUser(groupId, userId, context.accessToken);
+        // ใช้คำสั่งตรงตัวแล้ว ถือว่าจบเรื่องเดิม ล้างบริบทที่คุยค้างไว้
+        await clearSession(groupId, userId).catch(() => {});
+        return handleRuleCommand({ command, lineGroupId: groupId, user });
+      }, context.accessToken);
+    }
+
+    // ภาษาธรรมชาติ: ส่งให้ Gemini ถ้ายังไม่ได้ตั้งค่าไว้ก็ตอบเป็นเมนูปุ่ม (spec §19)
+    const gemini = getGeminiConfigOrNull();
+    if (!command) return [fallbackMenu()];
 
     return runOrExplain(async () => {
       const user = await ensureUser(groupId, userId, context.accessToken);
-      return handleRuleCommand({ command, lineGroupId: groupId, user });
+      if (!gemini) return [fallbackMenu()];
+
+      return runAgent({
+        text: command,
+        lineGroupId: groupId,
+        lineUserId: userId,
+        user,
+        client: createGeminiClient(),
+      });
     }, context.accessToken);
   }
 

@@ -49,10 +49,10 @@ function actionData(collected: Collected[], label: string): string {
   for (const message of collected.at(-1)?.messages ?? []) {
     if (message.type === "template") {
       const action = message.template.actions.find((item) => item.label === label);
-      if (action) return action.data;
+      if (action && "data" in action) return action.data;
     } else if (message.quickReply) {
       const item = message.quickReply.items.find((entry) => entry.action.label === label);
-      if (item) return item.action.data;
+      if (item && "data" in item.action) return item.action.data;
     }
   }
   throw new Error(`ไม่พบปุ่ม ${label}`);

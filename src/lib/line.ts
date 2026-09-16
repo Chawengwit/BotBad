@@ -21,7 +21,14 @@ export type DatetimePickerAction = {
   max?: string;
 };
 
-export type MessageAction = PostbackAction | DatetimePickerAction;
+/** กดแล้วส่งข้อความนั้นแทนผู้ใช้ ใช้กับเมนูคำสั่งสำรอง */
+export type TextMessageAction = {
+  type: "message";
+  label: string;
+  text: string;
+};
+
+export type MessageAction = PostbackAction | DatetimePickerAction | TextMessageAction;
 
 export type QuickReply = { items: { type: "action"; action: MessageAction }[] };
 

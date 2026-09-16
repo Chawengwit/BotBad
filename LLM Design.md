@@ -67,6 +67,7 @@ Postback ไม่เรียก LLM เด็ดขาด
 | Timeout ต่อการเรียก Gemini | 8 วินาที |
 | `temperature` | 0.2 |
 | `maxOutputTokens` | 512 |
+| Model | `GEMINI_MODEL` ค่าเริ่มต้น `gemini-2.5-flash` |
 | History ที่ส่ง | 10 ข้อความล่าสุด |
 | ความยาวข้อความจาก User | ตัดที่ 500 ตัวอักษร |
 | ความยาวข้อความตอบ | ตัดที่ 1,000 ตัวอักษร |
@@ -84,15 +85,16 @@ Postback ไม่เรียก LLM เด็ดขาด
 
 ไฟล์: `src/llm/system-prompt.ts`
 
-Placeholder ที่ App ต้องแทนค่าก่อนส่งทุก request:
+ประกอบข้อความในโค้ด (`buildSystemPrompt`) โดยเติมค่าเหล่านี้ให้ทุก request:
 
-| Placeholder | ตัวอย่าง |
+| ค่า | ตัวอย่าง |
 |---|---|
-| `{{today}}` | `2026-09-15` |
-| `{{weekday}}` | `อังคาร` |
-| `{{now_time}}` | `17:30` |
-| `{{display_name}}` | `เชวง` |
-| `{{open_game_summary}}` | `พุธ 16 ก.ย. 19:00-21:00, 1 คอร์ท, 5/8 คน, ผู้สร้าง: Bank` หรือ `ไม่มีรอบที่เปิดอยู่` |
+| วันนี้ | `อังคาร 2026-09-15` |
+| เวลาตอนนี้ | `17:30` |
+| คนที่คุยด้วย | `เชวง` |
+| รอบที่เปิดอยู่ | `ABC Badminton \| พุธ 16 ก.ย. 19:00 - 21:00 \| 1 คอร์ท \| 5/8 คน \| มีลิงก์แผนที่ \| คนที่คุยด้วยเป็นคนเปิดรอบนี้ \| และยังไม่ได้ลงชื่อ` หรือ `ไม่มีรอบที่เปิดอยู่` |
+
+ตัวอย่างโครงข้อความ (ของจริงอยู่ใน `src/llm/system-prompt.ts`):
 
 ```text
 คุณคือ "บอทจ๋า" ผู้ช่วยจัดรอบตีแบดมินตันใน LINE Group
@@ -111,7 +113,8 @@ Placeholder ที่ App ต้องแทนค่าก่อนส่งท
 
 ## กติกาของกลุ่ม
 - 1 กลุ่มมีรอบที่เปิดอยู่ได้ครั้งละ 1 รอบ
-- จองได้ 1-4 คอร์ท, 1 คอร์ทรับ 8 คน
+- จองได้ 1-4 คอร์ท ค่าปกติคอร์ทละ 8 คน ปรับได้ 2-64 คน
+- ทุกรอบต้องมีชื่อคอร์ท ส่วนลิงก์แผนที่จะมีหรือไม่มีก็ได้
 - ทุกคนเล่นเต็มเวลาของรอบ
 - เล่นเป็นชั่วโมงเต็ม (1, 2, 3 ชั่วโมง ...)
 - เฉพาะคนสร้างรอบที่แก้ไข ยกเลิก หรือปิดรอบได้
@@ -172,9 +175,10 @@ R16. ห้ามทำรายการแทนสมาชิกคนอื
 
 ไฟล์:
 
-- `src/llm/tools.ts` — Gemini `FunctionDeclaration[]`
-- `src/llm/tool-schemas.ts` — zod schema ของ args (ต้องตรงกับ declaration)
+- `src/llm/tools.ts` — Gemini `FunctionDeclaration[]` + zod schema ของ args (อยู่ไฟล์เดียวกันเพื่อให้แก้พร้อมกันเสมอ)
 - `src/llm/tool-executor.ts` — map ชื่อ tool → Service
+- `src/llm/agent.ts` — วน tool loop
+- `src/llm/system-prompt.ts` — System Prompt + Rules
 
 ## หลักการ
 
@@ -191,12 +195,14 @@ R16. ห้ามทำรายการแทนสมาชิกคนอื
 | `list_players` | อ่าน | – | รายชื่อผู้เล่น |
 | `join_game` | เขียนทันที | – | ลงชื่อคนที่พิมพ์ |
 | `leave_game` | เขียนทันที | – | ถอนชื่อคนที่พิมพ์ |
-| `propose_create_game` | ขอยืนยัน | `court_count?`, `play_date?`, `start_time?`, `duration_minutes?` | `MISSING_FIELDS` หรือสร้าง pending action |
-| `propose_edit_game` | ขอยืนยัน | `court_count?`, `play_date?`, `start_time?`, `duration_minutes?` | สร้าง pending action |
+| `propose_create_game` | ขอยืนยัน | `court_count?`, `max_players?`, `play_date?`, `start_time?`, `duration_minutes?`, `court_name?`, `location_url?` | `MISSING_FIELDS` หรือสร้าง pending action |
+| `propose_edit_game` | ขอยืนยัน | ช่องเดียวกัน (optional ทั้งหมด) | สร้าง pending action |
 | `propose_cancel_game` | ขอยืนยัน | – | สร้าง pending action |
 | `propose_close_game` | ขอยืนยัน | – | สร้าง pending action |
 
 ## Declaration (TypeScript)
+
+ตัวอย่างย่อ ของจริงดู `src/llm/tools.ts`
 
 ```ts
 // src/llm/tools.ts
@@ -206,8 +212,18 @@ const gameFields = {
   court_count: {
     type: Type.INTEGER,
     description: "จำนวนคอร์ท 1 ถึง 4",
-    minimum: 1,
-    maximum: 4,
+  },
+  max_players: {
+    type: Type.INTEGER,
+    description: "จำนวนคนสูงสุดที่รับ 2 ถึง 64 ถ้าไม่บอกมา ระบบใช้ค่าปกติคือ คอร์ท x 8",
+  },
+  court_name: {
+    type: Type.STRING,
+    description: "ชื่อคอร์ทหรือสนามที่ไปเล่น",
+  },
+  location_url: {
+    type: Type.STRING,
+    description: "ลิงก์แผนที่ของคอร์ท ใส่เฉพาะเมื่อผู้ใช้ให้ลิงก์มา",
   },
   play_date: {
     type: Type.STRING,
@@ -334,7 +350,8 @@ type ToolResult =
 | `NOT_JOINED` | ถอนชื่อทั้งที่ไม่ได้ลง | – |
 | `GAME_FULL` | รอบเต็ม | `current_players`, `max_players` |
 | `NOT_GAME_CREATOR` | ไม่ใช่ผู้สร้าง | `creator_name` |
-| `COURT_TOO_SMALL` | ลดคอร์ทแล้วคนเกิน | `current_players`, `new_max_players` |
+| `COURT_TOO_SMALL` | ลดคอร์ทแล้วคนเกิน | `current_players`, `new_court_count`, `new_max_players` |
+| `MAX_PLAYERS_TOO_SMALL` | ลดจำนวนคนต่ำกว่าคนที่ลงชื่อแล้ว | `current_players`, `new_max_players` |
 | `DATE_IN_PAST` | วันเวลาผ่านไปแล้ว | – |
 | `MISSING_FIELDS` | ข้อมูลสร้างรอบไม่ครบ | `missing: string[]`, `received` |
 | `NO_CHANGES` | propose_edit_game ไม่มีค่าที่เปลี่ยน | – |
@@ -370,6 +387,8 @@ type ToolResult =
 ```json
 { "ok": true, "data": { "current_players": 6, "max_players": 8 } }
 ```
+
+`propose_create_game` ที่ข้อมูลไม่ครบจะ **ไม่สร้าง** pending action ปล่อยให้ LLM ถามต่อ
 
 `propose_create_game` (ครบ):
 
@@ -421,7 +440,8 @@ Tool Executor เก็บ UI ไว้ฝั่ง App ระหว่าง lo
 
 1. Log error (ห้าม log API key)
 2. ถ้ามี `propose_*` สำเร็จแล้วในรอบนี้ → ส่งการ์ดยืนยันพร้อมข้อความสำเร็จรูป
-3. ถ้าไม่มี → ส่งข้อความ Fallback:
+3. ถ้ายังไม่ได้ตั้ง `GEMINI_API_KEY` → ข้ามการเรียก LLM ไปที่เมนูปุ่มเลย
+4. ถ้าไม่มี → ส่งข้อความ Fallback:
 
 ```text
 🤔 ตอนนี้ผมยังไม่เข้าใจประโยคนี้
@@ -455,6 +475,7 @@ Quick Reply:
 
 ## กฎ
 
+- เก็บที่ตาราง `conversation_sessions` ผ่าน `src/repositories/session.repository.ts`
 - 1 session ต่อ (group, user)
 - เก็บไม่เกิน 10 ข้อความล่าสุด
 - `expires_at = now() + 10 นาที` ทุกครั้งที่มีข้อความใหม่

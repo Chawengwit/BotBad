@@ -68,6 +68,25 @@ export function getDatabaseSchema(): string {
   return parsed.data;
 }
 
+const geminiModelSchema = z.string().trim().min(1).default("gemini-2.5-flash");
+
+export type GeminiConfig = { apiKey: string; model: string };
+
+/** null เมื่อยังไม่ได้ตั้ง GEMINI_API_KEY ระบบจะถอยไปใช้เมนูปุ่มแทน (LLM Design §9) */
+export function getGeminiConfigOrNull(): GeminiConfig | null {
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) return null;
+
+  const model = geminiModelSchema.safeParse(process.env.GEMINI_MODEL ?? undefined);
+  return { apiKey, model: model.success ? model.data : "gemini-2.5-flash" };
+}
+
+export function getGeminiConfig(): GeminiConfig {
+  const config = getGeminiConfigOrNull();
+  if (!config) throw new Error("Missing GEMINI_API_KEY");
+  return config;
+}
+
 /** ตรวจ env ของ LINE ทั้งหมด รายงานทุกตัวที่ผิดในทีเดียว */
 export function getLineEnv(): LineEnv {
   const values = {} as LineEnv;

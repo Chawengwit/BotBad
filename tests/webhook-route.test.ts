@@ -30,7 +30,9 @@ describe("POST /api/line/webhook", () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let warnSpy: ReturnType<typeof vi.spyOn>;
 
-  const replies = () => fetchMock.mock.calls.map((call) => replyBody(call as FetchCall));
+  const replyCalls = () =>
+    fetchMock.mock.calls.filter((call) => String(call[0]).includes("/message/reply"));
+  const replies = () => replyCalls().map((call) => replyBody(call as FetchCall));
   const logged = () => [...errorSpy.mock.calls, ...warnSpy.mock.calls].flat().join(" ");
 
   beforeEach(() => {
@@ -222,13 +224,22 @@ describe("POST /api/line/webhook", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("stays silent for group text that is not a command yet", async () => {
-      // คำสั่งที่ยังไม่รองรับจะเงียบไว้ก่อนจนกว่าจะต่อ LLM (spec §19)
-      // ข้อความนี้ไม่ตรงคำสั่งไหน จึงไม่แตะฐานข้อมูลเลย
+    it("answers natural language instead of going quiet", async () => {
+      // ข้อความที่ไม่ตรงคำสั่งต้องได้คำตอบเสมอ (LLM หรือเมนูสำรอง)
+      vi.stubEnv("GEMINI_API_KEY", undefined);
+
       await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า สวัสดี", group)] }));
 
+      expect(replyCalls()).toHaveLength(1);
+      expect(replies()[0]?.messages[0]?.text ?? "").not.toBe("");
+    });
+
+    it("never calls Gemini for a message without the wake word", async () => {
+      vi.stubEnv("GEMINI_API_KEY", "fake-key-value");
+
+      await POST(makeRequest({ destination: "U1", events: [textEvent("วันนี้ฝนตก", group)] }));
+
       expect(fetchMock).not.toHaveBeenCalled();
-      expect(errorSpy).not.toHaveBeenCalled();
     });
 
     it("tells 1:1 chat users the bot is group-only", async () => {
