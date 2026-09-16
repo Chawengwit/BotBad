@@ -13,13 +13,19 @@ import {
 } from "@/repositories/session.repository";
 import type { UserRow } from "@/repositories/types";
 import { findBillContext } from "@/services/bill.service";
-import { buildSystemPrompt } from "./system-prompt";
+import { buildSystemPrompt, isIgnoreReply } from "./system-prompt";
 import { executeTool, type ToolContext } from "./tool-executor";
 import { toolDeclarations } from "./tools";
 
 /** ข้อความยาว ๆ ไม่ได้ช่วยให้เข้าใจดีขึ้น แต่กินโควตา (LLM Design §3) */
 const MAX_INPUT_LENGTH = 500;
 const MAX_OUTPUT_LENGTH = 1_000;
+
+/**
+ * tool ที่ทำงานเสร็จในตัว ไม่มีอะไรให้คุยต่อ
+ * propose_ ไม่นับ เพราะยังรอให้กดปุ่มยืนยัน ส่วน get_ กับ list_ เป็นการถามข้อมูล ยังคุยต่อได้
+ */
+const TERMINAL_TOOLS: readonly string[] = ["join_game", "leave_game", "mark_my_payment"];
 
 export type AgentInput = {
   text: string;
@@ -28,6 +34,14 @@ export type AgentInput = {
   user: UserRow;
   client: GeminiClient;
   now?: Date;
+  /** ข้อความนี้มาทางโหมดฟัง ไม่ได้ขึ้นต้นด้วย wake word (spec §6) */
+  listening?: boolean;
+};
+
+export type AgentReply = {
+  messages: LineMessage[];
+  /** งานจบแล้ว ไม่มีอะไรค้าง ผู้เรียกเอาไปปิดโหมดฟัง */
+  done: boolean;
 };
 
 function toContents(history: SessionMessage[], userText: string): Content[] {
@@ -59,12 +73,16 @@ async function buildGameContext(lineGroupId: string, user: UserRow) {
 
 /**
  * คุยกับ Gemini แล้วเรียก tool ตามที่ขอ วนได้สูงสุด MAX_TOOL_LOOPS รอบ (LLM Design §3)
- * ทุกทางที่ล้มเหลวจบที่เมนูปุ่ม ไม่ปล่อยให้เงียบ
+ *
+ * ทางที่ล้มเหลวจบต่างกันตามว่ามาทางไหน
+ * - มี wake word: จบที่เมนูปุ่ม ผู้ใช้เรียกบอทมาเอง ต้องได้อะไรกลับไปเสมอ
+ * - โหมดฟัง: เงียบ เพราะไม่รู้ด้วยซ้ำว่าข้อความนั้นคุยกับบอทหรือเปล่า (spec §6)
  */
-export async function runAgent(input: AgentInput): Promise<LineMessage[]> {
+export async function runAgent(input: AgentInput): Promise<AgentReply> {
   const userText = input.text.slice(0, MAX_INPUT_LENGTH);
   const toolContext: ToolContext = { lineGroupId: input.lineGroupId, user: input.user };
   const attachments: LineMessage[] = [];
+  const toolsRun: string[] = [];
 
   try {
     const [history, openGame, openBill] = await Promise.all([
@@ -78,6 +96,7 @@ export async function runAgent(input: AgentInput): Promise<LineMessage[]> {
       openGame,
       openBill,
       ...(input.now ? { now: input.now } : {}),
+      ...(input.listening ? { listening: true } : {}),
     });
 
     const contents = toContents(history, userText);
@@ -107,6 +126,7 @@ export async function runAgent(input: AgentInput): Promise<LineMessage[]> {
       for (const call of turn.calls) {
         const outcome = await executeTool(call.name, call.args, toolContext);
         attachments.push(...outcome.messages);
+        if (outcome.result.ok) toolsRun.push(call.name);
         outcomes.push({ name: call.name, response: outcome.result });
       }
 
@@ -121,21 +141,36 @@ export async function runAgent(input: AgentInput): Promise<LineMessage[]> {
       });
     }
 
+    // โหมดฟัง: LLM บอกว่าข้อความนี้ไม่ได้คุยกับบอท เงียบและปิดโหมดฟัง
+    // ไม่บันทึกลง history ด้วย จะได้ไม่เอาบทสนทนาของคนอื่นไปปนบริบทของบอท
+    if (input.listening && attachments.length === 0 && isIgnoreReply(replyText)) {
+      return { messages: [], done: true };
+    }
+
     // ไม่มีทั้งข้อความและปุ่ม แปลว่าไปไม่สุด เช่น วน tool ครบแล้วยังไม่ได้คำตอบ
-    if (!replyText && attachments.length === 0) return [fallbackMenu()];
+    if (!replyText && attachments.length === 0) return giveUp(input);
 
     await rememberTurn(input, history, userText, replyText);
-    return buildReply(replyText, attachments);
+    return {
+      messages: buildReply(replyText, attachments),
+      done: toolsRun.some((name) => TERMINAL_TOOLS.includes(name)),
+    };
   } catch (error) {
     console.error("[llm] failed:", formatErrorForLog(error));
 
     // งานบางอย่างทำไปแล้วก่อนพัง ต้องส่งการ์ดให้ผู้ใช้เห็น ไม่งั้นจะมีรายการค้างที่ไม่มีปุ่มกด
     if (attachments.length > 0) {
       await rememberTurn(input, [], userText, "").catch(() => {});
-      return buildReply("นี่คือผลล่าสุดครับ 👇", attachments);
+      return { messages: buildReply("นี่คือผลล่าสุดครับ 👇", attachments), done: false };
     }
-    return [fallbackMenu()];
+    return giveUp(input);
   }
+}
+
+/** ตีความไม่ได้หรือพังไปเลย มีทางเข้าสองทางจึงยอมแพ้คนละแบบ */
+function giveUp(input: AgentInput): AgentReply {
+  if (input.listening) return { messages: [], done: true };
+  return { messages: [fallbackMenu()], done: false };
 }
 
 /** ข้อความจาก LLM + การ์ด รวมแล้วต้องไม่เกินที่ LINE ส่งได้ต่อครั้ง เก็บการ์ดใบล่าสุดไว้ก่อน */

@@ -66,6 +66,8 @@ Bot:
 
 `บอทจ๋า` คือ Wake Word / Scope Gate ของระบบ
 
+เรียกชื่อครั้งเดียวแล้วสั่งงานต่อได้โดยไม่ต้องเรียกซ้ำ ดู "โหมดฟัง" ใน §6
+
 ---
 
 # 3. Technology Stack
@@ -142,7 +144,8 @@ Verify Signature → อ่าน source.groupId
     ▼
 Router
     │
-    ├── ข้อความไม่มี "บอทจ๋า" ──────────► Ignore
+    ├── ข้อความไม่มี "บอทจ๋า"
+    │   และไม่ได้อยู่ในโหมดฟัง ─────────► Ignore
     │
     ├── Postback จากปุ่ม ──────────────┐
     │                                  │
@@ -304,6 +307,55 @@ Application ส่งข้อความนี้ไป LINE
   - รับเฉพาะข้อความของคนที่สั่งงานไว้ ในกลุ่มเดียวกัน และภายในอายุของ pending action
   - ถ้าไม่มีรายการที่รออยู่ ต้อง ignore เหมือนเดิม
   - ถ้าตรวจสอบไม่ได้ (เช่น ฐานข้อมูลมีปัญหา) ต้องเงียบ ห้ามตอบ error ใส่บทสนทนาในกลุ่ม
+- **ข้อความของคนที่เพิ่งเรียกบอท ระหว่างอยู่ในโหมดฟัง** (ดูหัวข้อถัดไป)
+
+## โหมดฟัง
+
+เรียก `บอทจ๋า` ครั้งเดียว แล้วสั่งงานในข้อความถัดไปได้เลยโดยไม่ต้องเรียกชื่ออีก
+
+```text
+สมชาย:  บอทจ๋า
+บอท:    ว่าไงครับ 🏸                      ← เปิดโหมดฟังให้สมชาย
+สมชาย:  เปิดตีพรุ่งนี้สองทุ่ม              ← ไม่ต้องมี wake word
+บอท:    กี่คอร์ทดีครับ?
+สมชาย:  2 คอร์ท
+บอท:    ✅ เปิดรอบแล้ว                     ← งานสำเร็จ ปิดโหมดฟัง
+สมชาย:  เดี๋ยวเจอกันนะทุกคน                ← เงียบ
+สมหญิง: เย้ ไปด้วย                        ← เงียบ (คนละคน)
+```
+
+`บอทจ๋า เปิดตี` แบบเดิมยังใช้ได้ทุกประการ โหมดฟังเป็นทางเลือกเพิ่ม ไม่ได้แทนที่
+
+### ขอบเขต
+
+- 1 โหมดฟังต่อ (group, user) เก็บที่ `conversation_sessions.listening_until`
+- รับเฉพาะข้อความของ **คนที่เรียกบอท** ในกลุ่มเดียวกัน คนอื่นพูดต้องเงียบ
+- รับเฉพาะ message type `text` ตำแหน่งที่แชร์มาลอย ๆ ไม่นับเป็นคำสั่ง
+- ถ้ายังไม่ได้ตั้งค่า Gemini ไม่ต้องเปิดโหมดฟัง เพราะตีความประโยคอิสระไม่ได้อยู่ดี
+
+### เปิดเมื่อ
+
+- เรียก `บอทจ๋า` เฉย ๆ ไม่มีคำสั่งตามมา
+- ใช้คำสั่งที่ยังคุยไม่จบ (`เปิดตี` `แก้ไข` `ยกเลิก` `ปิดรอบ` `คิดเงิน` `ยกเลิกบิล`)
+- LLM ตอบกลับโดยที่งานยังไม่เสร็จ เช่น ถามข้อมูลเพิ่ม หรือรอให้กดปุ่มยืนยัน
+
+อายุหน้าต่างคือ **2 นาที** นับใหม่ทุกครั้งที่บอทตอบ
+
+### ปิดเมื่อ
+
+- งานสำเร็จ: คำสั่งที่จบในตัว, tool `join_game` / `leave_game` / `mark_my_payment`,
+  กดปุ่ม `confirm` `reject` `join` `leave` `bill_paid` `bill_unpaid`
+- เงียบครบ 2 นาที
+- ผู้ใช้พิมพ์คำสั่งปิด เช่น `พอแล้ว` `จบ` `ขอบคุณ`
+- ข้อความเป็นคำรับคำสั้น ๆ (`555` `โอเค` `ครับ` อีโมจิล้วน) — ปิดโดยไม่เรียก LLM
+- LLM ตอบว่าข้อความนี้ไม่ได้คุยกับบอท (ดู `docs/llm-design.md` §10)
+
+### ข้อบังคับ
+
+- ในโหมดฟัง ถ้าตีความไม่ออกต้อง **เงียบ** ห้ามตอบเมนูสำรอง
+  ไม่งั้นบอทจะพ่นเมนูใส่ทุกประโยคในกลุ่ม
+- ข้อความที่ LLM บอกว่าไม่เกี่ยวกับบอท ห้ามบันทึกลง session history
+- ลำดับต้องเป็น "คำตอบที่บอทรออยู่" มาก่อน "โหมดฟัง" เสมอ
 
 ---
 
@@ -929,10 +981,16 @@ Bot:
 ลำดับการตัดสินใจ:
 
 ```text
-1. Postback event        → Postback Handler (ไม่เรียก LLM)
-2. ข้อความไม่มี wake word → Ignore
-3. คำสั่งตรงตัว          → Rule-based Handler (ไม่เรียก LLM)
-4. อื่น ๆ                 → LLM (Gemini + Tools)
+1. Postback event                    → Postback Handler (ไม่เรียก LLM)
+2. ข้อความมี wake word
+   2.1 คำสั่งปิดโหมดฟัง               → ปิดโหมดฟัง (ไม่เรียก LLM)
+   2.2 คำสั่งตรงตัว                   → Rule-based Handler (ไม่เรียก LLM)
+   2.3 เรียกชื่อเฉย ๆ                 → ทักกลับ + เปิดโหมดฟัง (ไม่เรียก LLM)
+   2.4 อื่น ๆ                         → LLM (Gemini + Tools)
+3. ข้อความไม่มี wake word
+   3.1 บอทรอคำตอบจากคนนี้อยู่          → Text Answer Handler (ไม่เรียก LLM)
+   3.2 คนนี้อยู่ในโหมดฟัง (§6)         → LLM แบบเงียบได้ ถ้าตีความไม่ออก
+   3.3 นอกนั้น                        → Ignore
 ```
 
 ## Rule-Based Commands
@@ -941,7 +999,9 @@ Bot:
 
 | ข้อความ | Action |
 |---|---|
-| (ว่าง) / `เมนู` / `ช่วยด้วย` | Help Menu + Quick Reply |
+| (ว่าง) | ทักกลับ + เปิดโหมดฟัง (§6) |
+| `เมนู` / `ช่วยด้วย` | Help Menu + Quick Reply |
+| `พอแล้ว` / `จบ` / `ขอบคุณ` | ปิดโหมดฟัง (§6) |
 | `เปิดตี` | Create Wizard (§9.1) |
 | `ลงชื่อ` | Join (§11) |
 | `ถอนชื่อ` | Leave (§13) |
@@ -1443,7 +1503,8 @@ Responsibilities:
 4. ถ้า `source.type` ไม่ใช่ `group`:
    - ข้อความที่มี wake word → ตอบ `ℹ️ บอทนี้ใช้งานได้ใน LINE Group เท่านั้น`
    - อื่น ๆ → ignore
-5. Check Wake Word (เฉพาะ message)
+5. Check Wake Word (เฉพาะ message) — ไม่มี wake word ก็ยังเข้า Router ได้
+   ถ้าบอทรอคำตอบอยู่ หรือคนนั้นอยู่ในโหมดฟัง (§6)
 6. ส่งเข้า Router (§18)
 7. Reply ผ่าน LINE Reply API (ใช้ `replyToken`)
 8. คืน HTTP 200 เสมอเมื่อ signature ถูกต้อง (error ภายในให้ log และตอบ User แทน)
@@ -1704,6 +1765,7 @@ Domain        → ไม่จำเป็น
 
 - [x] LINE Webhook (message, postback, join)
 - [x] Wake Word `บอทจ๋า`
+- [x] โหมดฟัง (เรียกครั้งเดียว สั่งต่อได้ไม่ต้องเรียกชื่ออีก)
 - [x] Hybrid Router (Postback / Rule-based / LLM)
 - [x] Create Game (Wizard + LLM)
 - [x] Court count
@@ -1927,7 +1989,13 @@ Bot:
 
 ```text
 Wake Word:
-message must start with "บอทจ๋า" (postback from bot buttons is exempt)
+message must start with "บอทจ๋า"
+exempt: postback from bot buttons, an answer the bot is waiting for,
+and messages from the person who just called the bot while the 2-minute
+listening window is open (same group, that person only)
+
+Listening window:
+silence is the default — if the message cannot be understood, say nothing
 
 Group:
 bot works in LINE groups only; every game query is scoped by line_group_id

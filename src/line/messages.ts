@@ -179,21 +179,43 @@ export function askPromptPay(pendingId: string, lastUsed: string | null): TextMe
 }
 
 /** ใช้เมื่อ Gemini ล่ม โควตาหมด หรือยังไม่ได้ตั้งค่า (LLM Design §9) */
+/** ปุ่มลัดใต้ข้อความ ส่งเป็นข้อความที่มี wake word ครบ จะได้เข้าทางเดิมทุกครั้ง */
+function commandShortcuts(commands: string[]): TextMessage["quickReply"] {
+  return {
+    items: commands.map((command) => ({
+      type: "action" as const,
+      action: {
+        type: "message" as const,
+        label: command,
+        text: `${WAKE_WORD} ${command}`,
+      },
+    })),
+  };
+}
+
 export function fallbackMenu(): TextMessage {
   return {
     type: "text",
     text: "🤔 ตอนนี้ผมยังไม่เข้าใจประโยคนี้\n\nลองเลือกคำสั่งด้านล่างได้เลย",
-    quickReply: {
-      items: ["เปิดตี", "ลงชื่อ", "ถอนชื่อ", "ใครตีบ้าง"].map((command) => ({
-        type: "action" as const,
-        action: {
-          type: "message" as const,
-          label: command,
-          text: `${WAKE_WORD} ${command}`,
-        },
-      })),
-    },
+    quickReply: commandShortcuts(["เปิดตี", "ลงชื่อ", "ถอนชื่อ", "ใครตีบ้าง"]),
   };
+}
+
+/**
+ * ตอบตอนมีคนเรียกชื่อบอทเฉย ๆ ยังไม่ได้สั่งอะไร
+ * หลังจากนี้บอทเปิดโหมดฟัง สั่งต่อได้เลยโดยไม่ต้องเรียกชื่ออีก (spec §6)
+ */
+export function greeting(): TextMessage {
+  return {
+    type: "text",
+    text: "ว่าไงครับ 🏸\n\nพิมพ์บอกได้เลยว่าจะให้ทำอะไร ไม่ต้องขึ้นต้นด้วยชื่อผมแล้ว\nหรือกดปุ่มด้านล่างก็ได้",
+    quickReply: commandShortcuts(["เปิดตี", "ลงชื่อ", "ใครตีบ้าง", "คิดเงิน"]),
+  };
+}
+
+/** ผู้ใช้บอกเองว่าจบแล้ว ปิดโหมดฟังทันทีไม่ต้องรอหมดเวลา */
+export function goodbye(): TextMessage {
+  return text("ได้เลยครับ 👋 เรียก \"บอทจ๋า\" ได้ใหม่ทุกเมื่อ");
 }
 
 export function askAgain(message: string): TextMessage {

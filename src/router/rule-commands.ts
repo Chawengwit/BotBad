@@ -34,9 +34,27 @@ export const RULE_COMMANDS = [
 
 export type RuleCommand = (typeof RULE_COMMANDS)[number];
 
+/**
+ * คำสั่งที่ตอบกลับมาเป็นคำถามหรือการ์ดให้ยืนยัน ไม่ใช่งานที่จบในตัว
+ * ใช้ตัดสินว่าหลังตอบแล้วต้องเปิดโหมดฟังต่อไหม (spec §6)
+ */
+const WIZARD_COMMANDS: readonly RuleCommand[] = [
+  "เปิดตี",
+  "แก้ไข",
+  "ยกเลิก",
+  "ปิดรอบ",
+  "คิดเงิน",
+  "ยกเลิกบิล",
+];
+
 /** เช็กก่อนแตะฐานข้อมูลหรือเรียก LINE API จะได้ไม่เปลืองกับข้อความที่ยังไม่รองรับ */
 export function isRuleCommand(command: string): command is RuleCommand {
   return (RULE_COMMANDS as readonly string[]).includes(command);
+}
+
+/** คำสั่งนี้เปิดเรื่องค้างไว้ไหม ถ้าใช่แปลว่ายังคุยกันไม่จบ */
+export function opensWizard(command: RuleCommand): boolean {
+  return WIZARD_COMMANDS.includes(command);
 }
 
 /** ตัด wake word ออกและเก็บเฉพาะคำสั่ง */

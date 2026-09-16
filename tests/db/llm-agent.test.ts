@@ -97,18 +97,20 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
     );
   }
 
-  function run(
+  /** เทสชุดนี้สนใจแค่ข้อความที่ตอบกลับ ส่วน done มีเทสแยกในชุดโหมดฟัง */
+  async function run(
     user: { lineUserId: string; user: UserRow },
     text: string,
     client: GeminiClient,
   ): Promise<LineMessage[]> {
-    return runAgent({
+    const reply = await runAgent({
       text,
       lineGroupId: GROUP_ID,
       lineUserId: user.lineUserId,
       user: user.user,
       client,
     });
+    return reply.messages;
   }
 
   it("เสนอเปิดรอบแล้วได้การ์ดยืนยัน ยังไม่เปิดจริง", async () => {
