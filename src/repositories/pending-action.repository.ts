@@ -62,6 +62,30 @@ export async function findUsablePendingAction(
   return rows[0] ?? null;
 }
 
+/**
+ * หารายการที่กำลังรอให้ผู้ใช้พิมพ์ตอบ (ชื่อคอร์ท / ลิงก์แผนที่)
+ * จับคู่จาก line_user_id ตรง ๆ จะได้ไม่ต้องเรียก LINE API ก่อนรู้ว่าต้องสนใจข้อความนี้ไหม
+ */
+export async function findAwaitingPendingAction(
+  lineGroupId: string,
+  lineUserId: string,
+  sql: Queryable = getSql(),
+): Promise<PendingActionRow | null> {
+  const rows = await sql<PendingActionRow[]>`
+    SELECT pa.id, pa.line_group_id, pa.requested_by, pa.game_id, pa.action_type, pa.payload
+    FROM pending_actions pa
+    JOIN users u ON u.id = pa.requested_by
+    WHERE pa.line_group_id = ${lineGroupId}
+      AND u.line_user_id = ${lineUserId}
+      AND pa.used_at IS NULL
+      AND pa.expires_at > now()
+      AND pa.payload ->> 'awaiting' IS NOT NULL
+    ORDER BY pa.created_at DESC
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
 /** อัปเดตข้อมูลที่ผู้ใช้เลือกมาทีละขั้นใน wizard */
 export async function updatePendingPayload(
   id: string,

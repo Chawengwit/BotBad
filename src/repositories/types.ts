@@ -28,6 +28,10 @@ export type GameRow = {
   court_count: number;
   max_players: number;
   status: GameStatus;
+  /** ชื่อคอร์ทที่ไปเล่น รอบที่เปิดก่อนมีฟีเจอร์นี้จะเป็น null */
+  court_name: string | null;
+  /** ลิงก์แผนที่ ใส่หรือไม่ใส่ก็ได้ */
+  location_url: string | null;
 };
 
 export type PlayerStatus = "joined" | "cancelled";

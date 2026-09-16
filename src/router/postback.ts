@@ -2,20 +2,8 @@ import { z } from "zod";
 import { AppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
 import { addDays, DATE_PATTERN, TIME_PATTERN, todayInBangkok } from "@/lib/time";
-import {
-  actionRejected,
-  askCourtCount,
-  askDate,
-  askDuration,
-  askTime,
-  confirmCreateGame,
-  confirmEditGame,
-  gameCancelled,
-  gameCard,
-  gameClosed,
-  wizardPrompt,
-} from "@/line/messages";
-import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
+import { actionRejected, gameCancelled, gameCard, gameClosed } from "@/line/messages";
+import { findOpenGame } from "@/repositories/game.repository";
 import {
   expirePendingAction,
   findUsablePendingAction,
@@ -23,19 +11,14 @@ import {
   type PendingActionRow,
 } from "@/repositories/pending-action.repository";
 import type { UserRow } from "@/repositories/types";
-import {
-  applyCancelGame,
-  applyCloseGame,
-  applyEditGame,
-  editPatchSchema,
-  validatePatch,
-} from "@/services/game-admin.service";
+import { applyCancelGame, applyCloseGame, applyEditGame } from "@/services/game-admin.service";
 import {
   confirmCreateGame as confirmCreateGameService,
-  gameDraftSchema,
-  missingDraftFields,
+  MAX_PLAYERS,
+  MIN_PLAYERS,
 } from "@/services/game.service";
 import { doJoin, doLeave, doList } from "./game-actions";
+import { advanceCreateWizard, advanceEditWizard, questionFor } from "./wizard";
 
 /** ข้อมูลที่แนบมากับปุ่ม เป็น query string และต้อง validate ทุกครั้ง (spec §18) */
 const postbackSchema = z.discriminatedUnion("action", [
@@ -43,7 +26,7 @@ const postbackSchema = z.discriminatedUnion("action", [
     action: z.literal("wizard"),
     pending_id: z.uuid(),
     // field = เลือกว่าจะแก้อะไร (เฉพาะตอนแก้ไขรอบ) ที่เหลือคือค่าที่เลือกมา
-    step: z.enum(["field", "court", "date", "time", "duration"]),
+    step: z.enum(["field", "court", "max", "date", "time", "duration", "location"]),
     value: z.string().min(1).max(40),
   }),
   z.object({ action: z.literal("confirm"), pending_id: z.uuid() }),
@@ -57,7 +40,7 @@ const postbackSchema = z.discriminatedUnion("action", [
 export type PostbackParams = { date?: string; time?: string };
 export type PostbackData = z.infer<typeof postbackSchema>;
 
-type DraftStep = "court" | "date" | "time" | "duration";
+type DraftStep = "court" | "max" | "date" | "time" | "duration";
 
 export function parsePostbackData(data: string): PostbackData | null {
   const parsed = postbackSchema.safeParse(Object.fromEntries(new URLSearchParams(data)));
@@ -76,6 +59,13 @@ function draftValue(
       const count = Number(value);
       if (!Number.isInteger(count) || count < 1 || count > 4) throw new AppError("INTERNAL_ERROR");
       return { field: "court_count", value: count };
+    }
+    case "max": {
+      const count = Number(value);
+      if (!Number.isInteger(count) || count < MIN_PLAYERS || count > MAX_PLAYERS) {
+        throw new AppError("INTERNAL_ERROR");
+      }
+      return { field: "max_players", value: count };
     }
     case "date": {
       const date =
@@ -98,21 +88,16 @@ function draftValue(
   }
 }
 
-/** คำถามของแต่ละช่อง ใช้ทั้งตอนเปิดรอบและตอนแก้ไข */
-function questionFor(step: string, pendingId: string): LineMessage {
-  switch (step) {
-    case "court":
-      return askCourtCount(pendingId);
-    case "date":
-      return askDate(pendingId);
-    case "time":
-      return askTime(pendingId);
-    case "duration":
-      return askDuration(pendingId);
-    default:
-      throw new AppError("INTERNAL_ERROR");
-  }
-}
+/** ปุ่มในเมนูแก้ไข → ช่องที่จะถามต่อ */
+const EDIT_FIELD_QUESTIONS = {
+  court: "court_count",
+  max: "max_players",
+  date: "play_date",
+  time: "start_time",
+  duration: "duration_minutes",
+  name: "court_name",
+  location: "location_url",
+} as const;
 
 async function handleConfirm(
   pending: PendingActionRow,
@@ -139,25 +124,26 @@ async function handleConfirm(
   }
 }
 
-/** แก้ไขทีละช่อง เลือกค่าเสร็จก็ไปการ์ดยืนยันเลย */
-async function handleEditStep(
+/** เลือกจากเมนูแก้ไขว่าจะแก้อะไร แล้วถามค่าใหม่ของช่องนั้น */
+async function handleEditFieldChoice(
   pending: PendingActionRow,
   lineGroupId: string,
-  field: string,
-  value: number | string,
+  choice: string,
 ): Promise<LineMessage[]> {
-  const patch = editPatchSchema.parse({ [field]: value });
+  const field = EDIT_FIELD_QUESTIONS[choice as keyof typeof EDIT_FIELD_QUESTIONS];
+  if (!field) throw new AppError("INTERNAL_ERROR");
 
   const game = await findOpenGame(lineGroupId);
   if (!game) throw new AppError("NO_OPEN_GAME");
 
-  // ตรวจตั้งแต่ตอนนี้ จะได้ไม่ให้กดยืนยันไปแล้วค่อยบอกว่าไม่ได้
-  validatePatch(game, patch, await countJoinedPlayers(game.id));
+  // ช่องที่ต้องพิมพ์ตอบ ต้องจำไว้ว่ากำลังรอคำตอบอะไรอยู่
+  if (field === "court_name" || field === "location_url") {
+    const awaiting = field === "court_name" ? "court_name" : "location";
+    const saved = await updatePendingPayload(pending.id, { awaiting });
+    if (!saved) throw new AppError("PENDING_EXPIRED");
+  }
 
-  const updated = await updatePendingPayload(pending.id, { [field]: value });
-  if (!updated) throw new AppError("PENDING_EXPIRED");
-
-  return [confirmEditGame(pending.id, game, patch)];
+  return [questionFor(field, pending.id, game.court_count)];
 }
 
 /**
@@ -193,21 +179,24 @@ export async function handlePostback(
 
   if (parsed.step === "field") {
     if (pending.action_type !== "edit_game") throw new AppError("INTERNAL_ERROR");
-    return [questionFor(parsed.value, pending.id)];
+    return handleEditFieldChoice(pending, input.lineGroupId, parsed.value);
+  }
+
+  if (parsed.step === "location") {
+    // ปุ่มข้าม: เปิดรอบต่อโดยไม่มีแผนที่ ส่วนตอนแก้ไขคือไม่เปลี่ยนอะไร
+    if (parsed.value !== "skip") throw new AppError("INTERNAL_ERROR");
+    if (pending.action_type === "edit_game") {
+      await expirePendingAction(pending.id, input.lineGroupId);
+      return [actionRejected(pending.action_type)];
+    }
+    return advanceCreateWizard(pending.id, { ...pending.payload, location_asked: true });
   }
 
   const { field, value } = draftValue(parsed.step, parsed.value, input.params, todayInBangkok());
 
   if (pending.action_type === "edit_game") {
-    return handleEditStep(pending, input.lineGroupId, field, value);
+    return advanceEditWizard(pending.id, input.lineGroupId, field, value);
   }
 
-  const payload = { ...pending.payload, [field]: value };
-  const updated = await updatePendingPayload(pending.id, payload);
-  if (!updated) throw new AppError("PENDING_EXPIRED");
-
-  const missing = missingDraftFields(payload);
-  if (missing.length > 0) return [wizardPrompt(pending.id, payload, missing)];
-
-  return [confirmCreateGame(pending.id, gameDraftSchema.parse(payload))];
+  return advanceCreateWizard(pending.id, { ...pending.payload, [field]: value });
 }

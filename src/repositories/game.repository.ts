@@ -11,6 +11,9 @@ export type NewGame = {
   startTime: string;
   durationMinutes: number;
   courtCount: number;
+  maxPlayers: number;
+  courtName: string;
+  locationUrl?: string | null;
 };
 
 /** รอบที่ยังเปิดอยู่ของกลุ่ม มีได้มากสุด 1 รอบ (spec §7) */
@@ -27,7 +30,9 @@ export async function findOpenGame(
            duration_minutes,
            court_count,
            max_players,
-           status
+           status,
+           court_name,
+           location_url
     FROM games
     WHERE line_group_id = ${lineGroupId} AND status = 'open'
   `;
@@ -38,7 +43,7 @@ export async function insertGame(game: NewGame, sql: Queryable = getSql()): Prom
   const rows = await sql<GameRow[]>`
     INSERT INTO games (
       line_group_id, created_by, play_date, start_time,
-      duration_minutes, court_count, max_players
+      duration_minutes, court_count, max_players, court_name, location_url
     )
     VALUES (
       ${game.lineGroupId},
@@ -47,7 +52,9 @@ export async function insertGame(game: NewGame, sql: Queryable = getSql()): Prom
       ${game.startTime}::time,
       ${game.durationMinutes},
       ${game.courtCount},
-      ${game.courtCount * 8}
+      ${game.maxPlayers},
+      ${game.courtName},
+      ${game.locationUrl ?? null}
     )
     RETURNING id,
               line_group_id,
@@ -57,7 +64,9 @@ export async function insertGame(game: NewGame, sql: Queryable = getSql()): Prom
               duration_minutes,
               court_count,
               max_players,
-              status
+              status,
+              court_name,
+              location_url
   `;
 
   const created = rows[0];
@@ -70,6 +79,9 @@ export type GamePatch = {
   startTime?: string;
   durationMinutes?: number;
   courtCount?: number;
+  maxPlayers?: number;
+  courtName?: string;
+  locationUrl?: string;
 };
 
 /** แก้ไขรอบ ส่งเฉพาะช่องที่จะเปลี่ยน (spec §15) */
@@ -84,7 +96,9 @@ export async function updateGame(
         start_time = COALESCE(${patch.startTime ?? null}::time, start_time),
         duration_minutes = COALESCE(${patch.durationMinutes ?? null}::int, duration_minutes),
         court_count = COALESCE(${patch.courtCount ?? null}::int, court_count),
-        max_players = COALESCE(${patch.courtCount ?? null}::int * 8, max_players),
+        max_players = COALESCE(${patch.maxPlayers ?? null}::int, max_players),
+        court_name = COALESCE(${patch.courtName ?? null}::text, court_name),
+        location_url = COALESCE(${patch.locationUrl ?? null}::text, location_url),
         updated_at = now()
     WHERE id = ${gameId}
     RETURNING id,
@@ -95,7 +109,9 @@ export async function updateGame(
               duration_minutes,
               court_count,
               max_players,
-              status
+              status,
+              court_name,
+              location_url
   `;
 
   const updated = rows[0];

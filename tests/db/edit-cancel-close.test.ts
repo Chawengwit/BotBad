@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeSql, type Sql } from "@/lib/db";
 import { handleEvent, type EventContext } from "@/line/handle-event";
-import type { ButtonsMessage, LineMessage } from "@/lib/line";
+import type { LineMessage } from "@/lib/line";
 import { insertGame } from "@/repositories/game.repository";
 import { upsertUser } from "@/repositories/user.repository";
 import type { GameRow, UserRow } from "@/repositories/types";
@@ -44,16 +44,18 @@ function postbackEvent(data: string, lineUserId: string, params: Record<string, 
   };
 }
 
-function lastTemplate(collected: Collected[]): ButtonsMessage {
-  const message = collected.at(-1)?.messages.find((item) => item.type === "template");
-  if (!message || message.type !== "template") throw new Error("ไม่พบปุ่มในข้อความล่าสุด");
-  return message;
-}
-
+/** หา data ของปุ่ม ไม่ว่าจะเป็นปุ่มใน template หรือ quick reply */
 function actionData(collected: Collected[], label: string): string {
-  const action = lastTemplate(collected).template.actions.find((item) => item.label === label);
-  if (!action) throw new Error(`ไม่พบปุ่ม ${label}`);
-  return action.data;
+  for (const message of collected.at(-1)?.messages ?? []) {
+    if (message.type === "template") {
+      const action = message.template.actions.find((item) => item.label === label);
+      if (action) return action.data;
+    } else if (message.quickReply) {
+      const item = message.quickReply.items.find((entry) => entry.action.label === label);
+      if (item) return item.action.data;
+    }
+  }
+  throw new Error(`ไม่พบปุ่ม ${label}`);
 }
 
 function messageTexts(messages: LineMessage[]): string {
@@ -106,6 +108,8 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
         startTime: "19:00",
         durationMinutes: 120,
         courtCount,
+        maxPlayers: courtCount * 8,
+        courtName: "คอร์ททดสอบ",
       },
       sql,
     );
@@ -174,6 +178,68 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
 
     const rows = await sql`SELECT court_count FROM games WHERE line_group_id = ${GROUP_ID}`;
     expect(rows[0]).toMatchObject({ court_count: 2 });
+  });
+
+  it("ผู้สร้างแก้จำนวนคนที่รับได้", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id, 2); // ค่าปกติ 16 คน
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+
+    await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "👥 จำนวนคน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "12 คน"), owner.lineUserId), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("รับ 16 → 12 คน");
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+
+    const rows = await sql`SELECT max_players, court_count FROM games WHERE line_group_id = ${GROUP_ID}`;
+    expect(rows[0]).toMatchObject({ max_players: 12, court_count: 2 });
+  });
+
+  it("ลดจำนวนคนต่ำกว่าคนที่ลงชื่อไว้แล้วไม่ได้", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id, 2);
+
+    for (let index = 0; index < 13; index += 1) {
+      const player = await newUser(`ผู้เล่น ${index + 1}`);
+      await joinGame(GROUP_ID, player.user.id, sql);
+    }
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+
+    await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "👥 จำนวนคน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "12 คน"), owner.lineUserId), context);
+
+    const reply = messageTexts(collected.at(-1)!.messages);
+    expect(reply).toContain("ลดเหลือ 12 คนไม่ได้");
+    expect(reply).toContain("13 คน");
+
+    const rows = await sql`SELECT max_players FROM games WHERE line_group_id = ${GROUP_ID}`;
+    expect(rows[0]).toMatchObject({ max_players: 16 });
+  });
+
+  it("แก้ชื่อคอร์ทด้วยการพิมพ์ตอบ", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+
+    await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "🏸 ชื่อคอร์ท"), owner.lineUserId), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("คอร์ทไหน");
+
+    await handleEvent(textEvent("คอร์ทใหม่เอี่ยม", owner.lineUserId), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("คอร์ทใหม่เอี่ยม");
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+
+    const rows = await sql`SELECT court_name FROM games WHERE line_group_id = ${GROUP_ID}`;
+    expect(rows[0]).toMatchObject({ court_name: "คอร์ทใหม่เอี่ยม" });
   });
 
   it("คนที่ไม่ได้เปิดรอบ แก้ไข ยกเลิก หรือปิดรอบไม่ได้", async () => {

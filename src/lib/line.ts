@@ -23,7 +23,14 @@ export type DatetimePickerAction = {
 
 export type MessageAction = PostbackAction | DatetimePickerAction;
 
-export type TextMessage = { type: "text"; text: string };
+export type QuickReply = { items: { type: "action"; action: MessageAction }[] };
+
+export type TextMessage = {
+  type: "text";
+  text: string;
+  /** ปุ่มลัดเหนือช่องพิมพ์ ใช้ได้ทั้งในกลุ่มและแชทเดี่ยว รองรับได้ถึง 13 ปุ่ม */
+  quickReply?: QuickReply;
+};
 
 export type ButtonsMessage = {
   type: "template";

@@ -213,12 +213,13 @@ describe("POST /api/line/webhook", () => {
   });
 
   describe("who gets an answer", () => {
-    it("ignores group text without the wake word, without logging", async () => {
+    it("never answers group text without the wake word, even if the database is unreachable", async () => {
+      // ข้อความทั่วไปในกลุ่มอาจเป็นคำตอบของ wizard ได้ จึงต้องเช็กฐานข้อมูล
+      // แต่ถ้าเช็กไม่ได้ ต้องเงียบ ไม่ใช่พ่น "ระบบขัดข้อง" ใส่ทุกบทสนทนา
       const res = await POST(makeRequest({ destination: "U1", events: [textEvent("ใครตีบ้าง", group)] }));
 
       expect(res.status).toBe(200);
       expect(fetchMock).not.toHaveBeenCalled();
-      expect(errorSpy).not.toHaveBeenCalled();
     });
 
     it("stays silent for group text that is not a command yet", async () => {

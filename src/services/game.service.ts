@@ -11,14 +11,34 @@ import { findOpenGame, insertGame, UNIQUE_VIOLATION } from "@/repositories/game.
 import type { GameRow } from "@/repositories/types";
 
 /** ข้อมูลที่ต้องครบก่อนเปิดรอบได้ เรียงตามลำดับที่ wizard ถาม */
-export const DRAFT_FIELDS = ["court_count", "play_date", "start_time", "duration_minutes"] as const;
+export const DRAFT_FIELDS = [
+  "court_count",
+  "max_players",
+  "play_date",
+  "start_time",
+  "duration_minutes",
+  "court_name",
+] as const;
 export type DraftField = (typeof DRAFT_FIELDS)[number];
+
+/** ขอบเขตจำนวนคน ตรงกับ CHECK ในฐานข้อมูล (migration 006) */
+export const MIN_PLAYERS = 2;
+export const MAX_PLAYERS = 64;
+export const COURT_NAME_MAX_LENGTH = 60;
+export const LOCATION_URL_MAX_LENGTH = 500;
+
+export const courtNameSchema = z.string().trim().min(1).max(COURT_NAME_MAX_LENGTH);
+export const locationUrlSchema = z.url().max(LOCATION_URL_MAX_LENGTH);
 
 export const gameDraftSchema = z.object({
   court_count: z.number().int().min(1).max(4),
+  max_players: z.number().int().min(MIN_PLAYERS).max(MAX_PLAYERS),
   play_date: z.string().regex(DATE_PATTERN),
   start_time: z.string().regex(TIME_PATTERN),
   duration_minutes: z.number().int().positive().multipleOf(60),
+  court_name: courtNameSchema,
+  // ลิงก์แผนที่ ใส่หรือไม่ใส่ก็ได้ (spec §9)
+  location_url: locationUrlSchema.optional(),
 });
 
 export type GameDraft = z.infer<typeof gameDraftSchema>;
@@ -82,6 +102,9 @@ export async function confirmCreateGame(
           startTime: draft.start_time,
           durationMinutes: draft.duration_minutes,
           courtCount: draft.court_count,
+          maxPlayers: draft.max_players,
+          courtName: draft.court_name,
+          locationUrl: draft.location_url ?? null,
         },
         tx,
       );

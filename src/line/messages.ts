@@ -2,7 +2,7 @@ import type { ErrorCode } from "@/errors/app-errors";
 import type { ButtonsMessage, LineMessage, MessageAction, TextMessage } from "@/lib/line";
 import { formatDuration, formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
 import type { PendingActionType } from "@/repositories/pending-action.repository";
-import type { GameDraft } from "@/services/game.service";
+import { MAX_PLAYERS, MIN_PLAYERS, type GameDraft } from "@/services/game.service";
 import type { EditPatch } from "@/services/game-admin.service";
 import type { GameRow } from "@/repositories/types";
 
@@ -100,6 +100,59 @@ export function askDuration(pendingId: string): ButtonsMessage {
   );
 }
 
+function quickReplyText(body: string, items: { label: string; data: string }[]): TextMessage {
+  return {
+    type: "text",
+    text: body,
+    quickReply: {
+      items: items.map((item) => ({
+        type: "action",
+        action: {
+          type: "postback",
+          label: item.label,
+          displayText: item.label,
+          data: item.data,
+        },
+      })),
+    },
+  };
+}
+
+/** ค่าปกติคือ คอร์ท x 8 แล้วให้เลือกบวกลบได้ทีละ 2 (spec §7) */
+export function playerCountChoices(courtCount: number): number[] {
+  const base = courtCount * 8;
+  return [base - 4, base - 2, base, base + 2, base + 4].filter(
+    (value) => value >= MIN_PLAYERS && value <= MAX_PLAYERS,
+  );
+}
+
+export function askMaxPlayers(pendingId: string, courtCount: number): TextMessage {
+  const base = courtCount * 8;
+
+  return quickReplyText(
+    `👥 รับกี่คน?\n\nค่าปกติของ ${courtCount} คอร์ทคือ ${base} คน`,
+    playerCountChoices(courtCount).map((count) => ({
+      label: count === base ? `${count} คน (ปกติ)` : `${count} คน`,
+      data: wizardData(pendingId, "max", String(count)),
+    })),
+  );
+}
+
+export function askCourtName(): TextMessage {
+  return text("🏟️ ไปตีที่คอร์ทไหน?\n\nพิมพ์ชื่อคอร์ทตอบได้เลย ไม่ต้องขึ้นต้นด้วย “บอทจ๋า”");
+}
+
+export function askLocation(pendingId: string): TextMessage {
+  return quickReplyText(
+    "📍 มีลิงก์แผนที่ไหม?\n\nวางลิงก์ Google Maps หรือกดแชร์ตำแหน่งมาก็ได้ ถ้าไม่มีก็กดข้ามได้เลย",
+    [{ label: "ข้าม", data: wizardData(pendingId, "location", "skip") }],
+  );
+}
+
+export function askAgain(message: string): TextMessage {
+  return text(message);
+}
+
 function confirmActions(
   pendingId: string,
   confirmLabel: string,
@@ -123,10 +176,11 @@ function confirmActions(
 
 export function confirmCreateGame(pendingId: string, draft: GameDraft): ButtonsMessage {
   const summary = [
-    "🏸 เปิดตีแบด",
+    `🏸 ${draft.court_name}`,
     `📅 ${formatThaiDate(draft.play_date)}`,
     `⏰ ${formatTimeRange(draft.start_time, draft.duration_minutes)}`,
-    `🏟️ ${draft.court_count} คอร์ท · 👥 รับ ${draft.court_count * 8} คน`,
+    `🏟️ ${draft.court_count} คอร์ท · 👥 รับ ${draft.max_players} คน`,
+    ...(draft.location_url ? ["📍 มีลิงก์แผนที่"] : []),
     "",
     "ยืนยันไหม?",
   ].join("\n");
@@ -146,7 +200,7 @@ const GAME_ACTIONS: MessageAction[] = [
  */
 export function gameCard(game: GameRow, joinedCount: number, headline?: string): ButtonsMessage {
   const body = [
-    headline ?? "🏸 BADMINTON",
+    headline ?? `🏸 ${game.court_name ?? "BADMINTON"}`,
     `📅 ${formatThaiDate(game.play_date)}`,
     `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
     `🏟️ ${game.court_count} คอร์ท · 👥 ${joinedCount}/${game.max_players} คน`,
@@ -160,9 +214,11 @@ export function playerList(game: GameRow, players: { display_name: string }[]): 
 
   return text(
     [
-      `🏸 ${formatThaiDate(game.play_date)}`,
+      `🏸 ${game.court_name ?? "BADMINTON"}`,
+      `📅 ${formatThaiDate(game.play_date)}`,
       `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
       `🏟️ ${game.court_count} คอร์ท`,
+      ...(game.location_url ? [`📍 ${game.location_url}`] : []),
       "",
       `👥 ${players.length}/${game.max_players} คน`,
       "",
@@ -171,19 +227,19 @@ export function playerList(game: GameRow, players: { display_name: string }[]): 
   );
 }
 
-export function editMenu(pendingId: string): ButtonsMessage {
-  return buttons(
-    "แก้ไขรอบตี",
+export function editMenu(pendingId: string): TextMessage {
+  return quickReplyText(
     "✏️ ต้องการแก้ไขอะไร?",
     [
       { label: "🏟️ จำนวนคอร์ท", value: "court" },
+      { label: "👥 จำนวนคน", value: "max" },
       { label: "📅 วันที่", value: "date" },
       { label: "⏰ เวลา", value: "time" },
       { label: "⏱️ ระยะเวลา", value: "duration" },
+      { label: "🏸 ชื่อคอร์ท", value: "name" },
+      { label: "📍 แผนที่", value: "location" },
     ].map((choice) => ({
-      type: "postback" as const,
       label: choice.label,
-      displayText: choice.label,
       data: wizardData(pendingId, "field", choice.value),
     })),
   );
@@ -194,7 +250,15 @@ function changeLines(game: GameRow, patch: EditPatch): string[] {
 
   if (patch.court_count !== undefined) {
     lines.push(`🏟️ ${game.court_count} → ${patch.court_count} คอร์ท`);
-    lines.push(`👥 รับ ${game.max_players} → ${patch.court_count * 8} คน`);
+  }
+  if (patch.max_players !== undefined) {
+    lines.push(`👥 รับ ${game.max_players} → ${patch.max_players} คน`);
+  }
+  if (patch.court_name !== undefined) {
+    lines.push(`🏸 ${game.court_name ?? "(ยังไม่ระบุ)"} → ${patch.court_name}`);
+  }
+  if (patch.location_url !== undefined) {
+    lines.push("📍 อัปเดตลิงก์แผนที่");
   }
   if (patch.play_date !== undefined) {
     lines.push(`📅 ${formatThaiDate(game.play_date)} → ${formatThaiDate(patch.play_date)}`);
@@ -272,6 +336,7 @@ export function actionRejected(actionType: PendingActionType): TextMessage {
 
 export function gameSummary(game: GameRow): string {
   return [
+    ...(game.court_name ? [`🏸 ${game.court_name}`] : []),
     `📅 ${formatThaiDate(game.play_date)}`,
     `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
     `🏟️ ${game.court_count} คอร์ท`,
@@ -318,6 +383,14 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
           "",
           `ขณะนี้มีผู้เล่น ${details.current_players} คน`,
           `แต่ ${details.new_court_count} คอร์ทรองรับได้ ${details.new_max_players} คน`,
+        ].join("\n"),
+      );
+    case "MAX_PLAYERS_TOO_SMALL":
+      return text(
+        [
+          `❌ ลดเหลือ ${details.new_max_players} คนไม่ได้`,
+          "",
+          `ตอนนี้มีคนลงชื่อแล้ว ${details.current_players} คน`,
         ].join("\n"),
       );
     case "NO_CHANGES":

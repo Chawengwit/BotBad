@@ -23,6 +23,11 @@ export const lineEventSchema = z.looseObject({
     .looseObject({
       type: z.string(),
       text: z.string().optional(),
+      // ข้อความแบบแชร์ตำแหน่งจาก LINE
+      title: z.string().max(200).optional(),
+      address: z.string().max(500).optional(),
+      latitude: z.number().optional(),
+      longitude: z.number().optional(),
     })
     .optional(),
   postback: z

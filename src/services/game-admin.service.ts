@@ -2,6 +2,12 @@ import { z } from "zod";
 import { AppError } from "@/errors/app-errors";
 import { getSql, type Sql } from "@/lib/db";
 import { DATE_PATTERN, isInThePast, TIME_PATTERN } from "@/lib/time";
+import {
+  courtNameSchema,
+  locationUrlSchema,
+  MAX_PLAYERS,
+  MIN_PLAYERS,
+} from "@/services/game.service";
 import { countJoinedPlayers, findOpenGame, updateGame, updateGameStatus } from "@/repositories/game.repository";
 import { lockOpenGame } from "@/repositories/player.repository";
 import {
@@ -20,9 +26,12 @@ import type { GameRow } from "@/repositories/types";
 export const editPatchSchema = z
   .object({
     court_count: z.number().int().min(1).max(4),
+    max_players: z.number().int().min(MIN_PLAYERS).max(MAX_PLAYERS),
     play_date: z.string().regex(DATE_PATTERN),
     start_time: z.string().regex(TIME_PATTERN),
     duration_minutes: z.number().int().positive().multipleOf(60),
+    court_name: courtNameSchema,
+    location_url: locationUrlSchema,
   })
   .partial();
 
@@ -76,13 +85,22 @@ export function startCloseGame(lineGroupId: string, userId: string) {
 export function validatePatch(game: GameRow, patch: EditPatch, joinedCount: number): void {
   if (Object.keys(patch).length === 0) throw new AppError("NO_CHANGES");
 
+  // ลดจำนวนคนที่รับได้ต่ำกว่าคนที่ลงชื่อไว้แล้วไม่ได้ (spec §15)
+  if (patch.max_players !== undefined && joinedCount > patch.max_players) {
+    throw new AppError("MAX_PLAYERS_TOO_SMALL", {
+      current_players: joinedCount,
+      new_max_players: patch.max_players,
+    });
+  }
+
+  // เปลี่ยนจำนวนคอร์ทไม่ได้ไปลดจำนวนคนอัตโนมัติแล้ว แต่ยังเตือนถ้าคอร์ทน้อยเกินกว่าคนที่ลงไว้มาก
   if (patch.court_count !== undefined) {
-    const newMax = patch.court_count * 8;
-    if (joinedCount > newMax) {
+    const suggestedMax = patch.court_count * 8;
+    if (joinedCount > suggestedMax) {
       throw new AppError("COURT_TOO_SMALL", {
         current_players: joinedCount,
         new_court_count: patch.court_count,
-        new_max_players: newMax,
+        new_max_players: suggestedMax,
       });
     }
   }
@@ -122,9 +140,15 @@ export async function applyEditGame(
       game.id,
       {
         courtCount: parsed.data.court_count,
+        // เปลี่ยนจำนวนคอร์ทแล้วยังไม่ได้ตั้งจำนวนคนใหม่ ให้ใช้ค่าปกติของคอร์ทนั้น
+        maxPlayers:
+          parsed.data.max_players ??
+          (parsed.data.court_count !== undefined ? parsed.data.court_count * 8 : undefined),
         playDate: parsed.data.play_date,
         startTime: parsed.data.start_time,
         durationMinutes: parsed.data.duration_minutes,
+        courtName: parsed.data.court_name,
+        locationUrl: parsed.data.location_url,
       },
       tx,
     );

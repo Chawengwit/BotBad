@@ -15,7 +15,8 @@
 - เปิดรอบตีแบด
 - กำหนดจำนวนคอร์ท
 - กำหนดวันและเวลา
-- ระบบคำนวณจำนวนผู้เล่นสูงสุดตามจำนวนคอร์ท
+- ระบบเสนอจำนวนผู้เล่นสูงสุดตามจำนวนคอร์ท และปรับเองได้
+- ระบุชื่อคอร์ทและลิงก์แผนที่
 - สมาชิกลงชื่อ
 - สมาชิกถอนชื่อ
 - ดูรายชื่อผู้เล่น
@@ -299,6 +300,10 @@ Application ส่งข้อความนี้ไป LINE
 
 - **Postback event** จากปุ่มที่ Bot ส่ง ไม่ต้องมี wake word
 - Postback ต้องผ่านการ validate `data` ด้วย zod ทุกครั้ง
+- **ข้อความที่บอทกำลังรอคำตอบอยู่** (ชื่อคอร์ท / ลิงก์แผนที่) ไม่ต้องมี wake word
+  - รับเฉพาะข้อความของคนที่สั่งงานไว้ ในกลุ่มเดียวกัน และภายในอายุของ pending action
+  - ถ้าไม่มีรายการที่รออยู่ ต้อง ignore เหมือนเดิม
+  - ถ้าตรวจสอบไม่ได้ (เช่น ฐานข้อมูลมีปัญหา) ต้องเงียบ ห้ามตอบ error ใส่บทสนทนาในกลุ่ม
 
 ---
 
@@ -330,13 +335,20 @@ User สามารถเลือกจำนวนคอร์ท:
 4 courts = 32 players
 ```
 
-Formula:
+ค่าตั้งต้น:
 
 ```text
 max_players = court_count * 8
 ```
 
-MVP ไม่ต้องให้ User กำหนด max players เอง
+User ปรับจำนวนคนเองได้ตอนเปิดรอบและตอนแก้ไข โดยเลือกจากค่าตั้งต้น ±2 และ ±4
+
+ขอบเขต:
+
+```text
+2 <= max_players <= 64
+max_players >= จำนวนคนที่ลงชื่อไว้แล้ว (ตอนแก้ไข)
+```
 
 ## One Open Game per Group
 
@@ -351,6 +363,15 @@ MVP ไม่ต้องให้ User กำหนด max players เอง
 ⚠️ ความเสี่ยงที่ยอมรับใน MVP:
 
 ถ้าผู้สร้างลืมปิดรอบ กลุ่มจะเปิดรอบใหม่ไม่ได้ ผู้สร้างต้องสั่ง `บอทจ๋า ปิดรอบ` หรือ `บอทจ๋า ยกเลิก` ก่อน (MVP ยังไม่มี admin override)
+
+## Venue
+
+ทุกรอบต้องมี **ชื่อคอร์ท** (1–60 ตัวอักษร) ส่วน **ลิงก์แผนที่** ใส่หรือไม่ใส่ก็ได้
+
+ลิงก์แผนที่รับได้ 2 ทาง:
+
+- วางลิงก์ (http/https) เช่น Google Maps
+- แชร์ตำแหน่งผ่าน LINE ระบบจะแปลงพิกัดเป็นลิงก์ Google Maps ให้
 
 ## Date / Time Validation
 
@@ -418,6 +439,12 @@ User:
 
 App สร้าง `pending_actions` (type `create_game`) เป็น draft แล้วถามทีละขั้น ทุกปุ่มส่ง postback ที่มี `pending_id`
 
+ลำดับคำถาม:
+
+```text
+กี่คอร์ท? → รับกี่คน? → วันไหน? → กี่โมง? → เล่นกี่ชั่วโมง? → คอร์ทไหน? → แผนที่? → ยืนยัน
+```
+
 Bot:
 
 ```text
@@ -442,6 +469,20 @@ Buttons:
 ```
 
 Bot:
+
+```text
+👥 รับกี่คน?
+
+ค่าปกติของ 1 คอร์ทคือ 8 คน
+```
+
+Quick Reply:
+
+```text
+[ 4 คน ] [ 6 คน ] [ 8 คน (ปกติ) ] [ 10 คน ] [ 12 คน ]
+```
+
+จากนั้น:
 
 ```text
 📅 วันไหน?
@@ -482,6 +523,22 @@ Buttons:
 [ 1 ชั่วโมง ]
 [ 2 ชั่วโมง ]
 [ 3 ชั่วโมง ]
+```
+
+จากนั้นถามสถานที่ (ตอบด้วยการพิมพ์ ไม่ต้องมี wake word):
+
+```text
+🏟️ ไปตีที่คอร์ทไหน?
+```
+
+```text
+📍 มีลิงก์แผนที่ไหม?
+```
+
+Quick Reply:
+
+```text
+[ ข้าม ]
 ```
 
 สุดท้าย Bot แสดง Confirmation:
@@ -712,24 +769,24 @@ Command:
 
 เฉพาะผู้สร้าง Game
 
-Bot:
+Bot (Quick Reply):
 
 ```text
-ต้องการแก้ไขอะไร?
+✏️ ต้องการแก้ไขอะไร?
 
-[ 🏟️ จำนวนคอร์ท ]
-[ 📅 วันที่ ]
-[ ⏰ เวลา ]
-[ ⏱️ ระยะเวลา ]
-[ ❌ ยกเลิก ]
+[ 🏟️ จำนวนคอร์ท ] [ 👥 จำนวนคน ] [ 📅 วันที่ ] [ ⏰ เวลา ]
+[ ⏱️ ระยะเวลา ] [ 🏸 ชื่อคอร์ท ] [ 📍 แผนที่ ]
 ```
 
 สามารถแก้ไข:
 
-- จำนวนคอร์ท
+- จำนวนคอร์ท (ถ้าไม่ได้ตั้งจำนวนคนมาด้วย จะปรับจำนวนคนเป็นค่าตั้งต้นของคอร์ทใหม่)
+- จำนวนคนที่รับ
 - วันที่
 - เวลา
 - duration
+- ชื่อคอร์ท
+- ลิงก์แผนที่
 
 ทุกการแก้ไขต้องผ่านการ์ดยืนยัน (`pending_actions` type `edit_game`)
 
@@ -979,6 +1036,8 @@ start_time
 duration_minutes
 court_count
 max_players
+court_name
+location_url
 status
 created_at
 updated_at
@@ -1223,7 +1282,8 @@ db/migrations/
 ├── 002_create_games.sql
 ├── 003_create_game_players.sql
 ├── 004_create_pending_actions.sql
-└── 005_create_conversation_sessions.sql
+├── 005_create_conversation_sessions.sql
+└── 006_game_capacity_and_venue.sql
 ```
 
 รันด้วย script ง่าย ๆ (`scripts/migrate.ts`) ที่:
@@ -1254,7 +1314,9 @@ CREATE TABLE games (
   start_time        TIME NOT NULL,
   duration_minutes  INT NOT NULL CHECK (duration_minutes > 0 AND duration_minutes % 60 = 0),
   court_count       INT NOT NULL CHECK (court_count BETWEEN 1 AND 4),
-  max_players       INT NOT NULL CHECK (max_players = court_count * 8),
+  max_players       INT NOT NULL CHECK (max_players BETWEEN 2 AND 64),
+  court_name        TEXT,
+  location_url      TEXT,
   status            TEXT NOT NULL DEFAULT 'open'
                     CHECK (status IN ('open', 'cancelled', 'completed')),
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1793,7 +1855,8 @@ Group:
 bot works in LINE groups only; every game query is scoped by line_group_id
 
 Players:
-max_players = court_count * 8
+max_players defaults to court_count * 8 and the organiser may change it (2..64)
+max_players can never drop below the number of people already signed up
 
 One open game:
 a group can have at most 1 game with status = open

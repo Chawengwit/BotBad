@@ -94,6 +94,8 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
         startTime: "19:00",
         durationMinutes: 120,
         courtCount,
+        maxPlayers: courtCount * 8,
+        courtName: "คอร์ททดสอบ",
       },
       sql,
     );

@@ -74,9 +74,11 @@ describe("ปุ่มที่บอทส่งออกไป", () => {
   it("การ์ดยืนยันสรุปรอบและมีปุ่มยืนยันกับยกเลิก", () => {
     const message = confirmCreateGame(PENDING_ID, {
       court_count: 1,
+      max_players: 8,
       play_date: "2026-09-16",
       start_time: "19:00",
       duration_minutes: 120,
+      court_name: "ABC Badminton",
     });
 
     expect(message.template.text).toContain("พุธ 16 ก.ย.");
@@ -95,14 +97,24 @@ describe("missingDraftFields", () => {
   it("บอกช่องที่ขาดเรียงตามลำดับคำถาม", () => {
     expect(missingDraftFields({})).toEqual([
       "court_count",
+      "max_players",
       "play_date",
       "start_time",
       "duration_minutes",
+      "court_name",
     ]);
-    expect(missingDraftFields({ court_count: 2, play_date: "2026-09-16" })).toEqual([
+    expect(missingDraftFields({ court_count: 2, max_players: 16, play_date: "2026-09-16" })).toEqual([
       "start_time",
       "duration_minutes",
+      "court_name",
     ]);
+  });
+
+  it("จำนวนคนและชื่อคอร์ทก็ต้องมี", () => {
+    expect(missingDraftFields({ max_players: 1 })).toContain("max_players");
+    expect(missingDraftFields({ max_players: 100 })).toContain("max_players");
+    expect(missingDraftFields({ court_name: "   " })).toContain("court_name");
+    expect(missingDraftFields({ court_name: "x".repeat(61) })).toContain("court_name");
   });
 
   it("ค่าที่ผิดรูปแบบถือว่ายังขาด", () => {
@@ -116,9 +128,11 @@ describe("missingDraftFields", () => {
     expect(
       missingDraftFields({
         court_count: 1,
+        max_players: 8,
         play_date: "2026-09-16",
         start_time: "19:00",
         duration_minutes: 120,
+        court_name: "ABC Badminton",
       }),
     ).toEqual([]);
   });

@@ -7,6 +7,7 @@ export type ErrorCode =
   | "GAME_FULL"
   | "NOT_GAME_CREATOR"
   | "COURT_TOO_SMALL"
+  | "MAX_PLAYERS_TOO_SMALL"
   | "DATE_IN_PAST"
   | "NO_CHANGES"
   | "MISSING_FIELDS"
