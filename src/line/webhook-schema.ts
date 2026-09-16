@@ -25,6 +25,19 @@ export const lineEventSchema = z.looseObject({
       text: z.string().optional(),
     })
     .optional(),
+  postback: z
+    .looseObject({
+      // data ที่บอทสร้างเองสั้นมาก ค่าที่ยาวผิดปกติไม่ต้องรับไว้
+      data: z.string().max(1000),
+      // datetimepicker ส่งค่าที่ผู้ใช้เลือกมาตรงนี้
+      params: z
+        .looseObject({
+          date: z.string().max(20).optional(),
+          time: z.string().max(20).optional(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 /**

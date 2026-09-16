@@ -3,7 +3,7 @@ import { replyMessages } from "@/lib/line";
 import { verifyLineSignature } from "@/lib/line-signature";
 import { formatErrorForLog } from "@/lib/log";
 import { discardBody, MAX_WEBHOOK_BODY_BYTES, readBodyWithLimit } from "@/lib/read-body";
-import { handleEvent, type ReplyFn } from "@/line/handle-event";
+import { handleEvent, type EventContext } from "@/line/handle-event";
 import { lineEventSchema, lineWebhookBodySchema } from "@/line/webhook-schema";
 
 // ประกาศไว้ให้ชัด เพราะ route นี้ใช้ node:crypto และ Buffer จะรันบน edge ไม่ได้
@@ -37,18 +37,18 @@ function parseEvents(rawBody: Buffer): unknown[] {
   return parsed.data.events;
 }
 
-async function handleOneEvent(rawEvent: unknown, reply: ReplyFn): Promise<void> {
+async function handleOneEvent(rawEvent: unknown, context: EventContext): Promise<void> {
   const parsed = lineEventSchema.safeParse(rawEvent);
   if (!parsed.success) {
     console.error("[webhook] skipped unsupported event:", describeIssues(parsed.error));
     return;
   }
-  await handleEvent(parsed.data, reply);
+  await handleEvent(parsed.data, context);
 }
 
 async function handleEvents(
   events: unknown[],
-  reply: ReplyFn,
+  context: EventContext,
   secrets: readonly string[],
 ): Promise<void> {
   const accepted = events.slice(0, MAX_EVENTS_PER_REQUEST);
@@ -58,7 +58,7 @@ async function handleEvents(
 
   for (let start = 0; start < accepted.length; start += MAX_CONCURRENT_REPLIES) {
     const batch = accepted.slice(start, start + MAX_CONCURRENT_REPLIES);
-    const results = await Promise.allSettled(batch.map((event) => handleOneEvent(event, reply)));
+    const results = await Promise.allSettled(batch.map((event) => handleOneEvent(event, context)));
 
     for (const result of results) {
       if (result.status === "rejected") {
@@ -109,10 +109,12 @@ export async function POST(request: Request): Promise<Response> {
   // ผ่าน signature แล้ว ตั้งแต่จุดนี้ต้องตอบ 200 เสมอ (spec §22 ข้อ 8)
   // error ภายในให้ log ไว้ ไม่ให้ LINE ส่งซ้ำ
   // (LINE Verify ส่ง events: [] มา จึงผ่านตรงนี้และได้ 200)
-  const reply: ReplyFn = (replyToken, messages) =>
-    replyMessages(replyToken, messages, env.LINE_CHANNEL_ACCESS_TOKEN);
+  const context: EventContext = {
+    reply: (replyToken, messages) => replyMessages(replyToken, messages, env.LINE_CHANNEL_ACCESS_TOKEN),
+    accessToken: env.LINE_CHANNEL_ACCESS_TOKEN,
+  };
 
-  await handleEvents(parseEvents(read.body), reply, [
+  await handleEvents(parseEvents(read.body), context, [
     env.LINE_CHANNEL_ACCESS_TOKEN,
     env.LINE_CHANNEL_SECRET,
   ]);

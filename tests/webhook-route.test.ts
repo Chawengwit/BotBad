@@ -221,9 +221,10 @@ describe("POST /api/line/webhook", () => {
       expect(errorSpy).not.toHaveBeenCalled();
     });
 
-    it("stays silent in a group until the router exists", async () => {
-      // spec §18 Router ยังไม่ได้ทำ จึงยังไม่มีคำตอบสำหรับคำสั่งในกลุ่ม
-      await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า เปิดตี", group)] }));
+    it("stays silent for group text that is not a command yet", async () => {
+      // คำสั่งที่ยังไม่รองรับจะเงียบไว้ก่อนจนกว่าจะต่อ LLM (spec §19)
+      // ข้อความนี้ไม่ตรงคำสั่งไหน จึงไม่แตะฐานข้อมูลเลย
+      await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า สวัสดี", group)] }));
 
       expect(fetchMock).not.toHaveBeenCalled();
       expect(errorSpy).not.toHaveBeenCalled();
@@ -282,13 +283,12 @@ describe("POST /api/line/webhook", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("greets when joining a group, without promising commands yet", async () => {
+    it("greets when joining a group and says how to start", async () => {
       await POST(makeRequest({ destination: "U1", events: [{ type: "join", replyToken: "rt", source: group }] }));
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const text = replies()[0]?.messages[0]?.text ?? "";
-      expect(text).toContain("บอทจ๋า");
-      expect(text).toContain("ยังสั่งงานไม่ได้");
+      expect(text).toContain("บอทจ๋า เปิดตี");
     });
 
     it("does not greet on join-like events from other sources", async () => {

@@ -1,4 +1,4 @@
-import { getSql, type Sql } from "@/lib/db";
+import { getSql, type Queryable } from "@/lib/db";
 import type { UserRow } from "./types";
 
 /**
@@ -8,7 +8,7 @@ import type { UserRow } from "./types";
 export async function upsertUser(
   lineUserId: string,
   displayName: string,
-  sql: Sql = getSql(),
+  sql: Queryable = getSql(),
 ): Promise<UserRow> {
   const rows = await sql<UserRow[]>`
     INSERT INTO users (line_user_id, display_name)
@@ -26,7 +26,7 @@ export async function upsertUser(
 
 export async function findUserByLineId(
   lineUserId: string,
-  sql: Sql = getSql(),
+  sql: Queryable = getSql(),
 ): Promise<UserRow | null> {
   const rows = await sql<UserRow[]>`
     SELECT id, line_user_id, display_name

@@ -3,6 +3,9 @@ import { getDatabaseSchema, getDatabaseUrl } from "./env";
 
 export type Sql = postgres.Sql<Record<string, never>>;
 
+/** รับได้ทั้ง connection ปกติและตัวที่อยู่ในทรานแซกชัน (sql.begin ส่งตัวหลังมาให้) */
+export type Queryable = Sql | postgres.TransactionSql<Record<string, never>>;
+
 let client: Sql | null = null;
 
 export function createSql(
