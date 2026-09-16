@@ -1,10 +1,6 @@
-import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { verifyLineSignature } from "@/lib/line-signature";
-
-const SECRET = "test-channel-secret";
-const sign = (body: string | Buffer, secret = SECRET) =>
-  createHmac("sha256", secret).update(body).digest("base64");
+import { SECRET, sign } from "./helpers";
 
 describe("verifyLineSignature", () => {
   const body = JSON.stringify({ destination: "U123", events: [] });

@@ -1,34 +1,20 @@
 import { createHmac } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "../app/api/line/webhook/route";
-
-const SECRET = "test-channel-secret";
-const TOKEN = "test-access-token";
+import {
+  group,
+  makeBrokenBodyRequest,
+  makeRequest,
+  oneToOne,
+  room,
+  SECRET,
+  textEvent,
+  TOKEN,
+} from "./helpers";
 
 // ข้อความตาม spec §22 ข้อ 4 เขียนเป็น literal ไว้ที่นี่ ไม่อ้างค่าจากโค้ด
 // จะได้จับได้ถ้ามีคนแก้ข้อความในโค้ดจนหลุดจาก spec
 const GROUP_ONLY_TEXT = "ℹ️ บอทนี้ใช้งานได้ใน LINE Group เท่านั้น";
-
-const group = { type: "group", groupId: "C123", userId: "U123" };
-const room = { type: "room", roomId: "R123", userId: "U123" };
-const oneToOne = { type: "user", userId: "U123" };
-
-const textEvent = (text: string, source: object, replyToken = "reply-token-1") => ({
-  type: "message",
-  replyToken,
-  source,
-  message: { type: "text", id: "1", text },
-});
-
-const sign = (body: string) => createHmac("sha256", SECRET).update(body, "utf8").digest("base64");
-
-function makeRequest(body: unknown, options: { signature?: string | null; headers?: HeadersInit } = {}) {
-  const raw = typeof body === "string" ? body : JSON.stringify(body);
-  const signature = options.signature === undefined ? sign(raw) : options.signature;
-  const headers = new Headers({ "content-type": "application/json", ...options.headers });
-  if (signature !== null) headers.set("x-line-signature", signature);
-  return new Request("http://localhost/api/line/webhook", { method: "POST", headers, body: raw });
-}
 
 type FetchCall = [string, RequestInit];
 
@@ -42,13 +28,19 @@ function replyBody(call: FetchCall) {
 describe("POST /api/line/webhook", () => {
   const fetchMock = vi.fn();
   let errorSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  const replies = () => fetchMock.mock.calls.map((call) => replyBody(call as FetchCall));
+  const logged = () => [...errorSpy.mock.calls, ...warnSpy.mock.calls].flat().join(" ");
 
   beforeEach(() => {
     vi.stubEnv("LINE_CHANNEL_SECRET", SECRET);
     vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", TOKEN);
-    fetchMock.mockReset().mockResolvedValue(new Response("{}", { status: 200 }));
+    // สร้าง Response ใหม่ทุกครั้ง ถ้าใช้ตัวเดิมซ้ำ call ที่สองจะเจอ "Body is unusable"
+    fetchMock.mockReset().mockImplementation(async () => new Response("{}", { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -58,26 +50,33 @@ describe("POST /api/line/webhook", () => {
   });
 
   describe("signature", () => {
-    it("returns 200 for LINE Verify (empty events)", async () => {
+    it("returns 200 for LINE Verify (empty events), quietly", async () => {
       const res = await POST(makeRequest({ destination: "U1", events: [] }));
+
       expect(res.status).toBe(200);
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+      expect(warnSpy).not.toHaveBeenCalled();
     });
 
     it("never calls LINE when the signature header is missing", async () => {
       const res = await POST(
         makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า", oneToOne)] }, { signature: null }),
       );
+
       expect(res.status).toBe(401);
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(logged()).toContain("x-line-signature");
     });
 
-    it("never calls LINE when the signature is wrong", async () => {
+    it("never calls LINE when the signature is wrong, and says so in the log", async () => {
       const res = await POST(
         makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า", oneToOne)] }, { signature: "AAAA" }),
       );
+
       expect(res.status).toBe(401);
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(logged()).toContain("LINE_CHANNEL_SECRET");
     });
 
     it("never calls LINE when the signature is made with another secret", async () => {
@@ -85,6 +84,7 @@ describe("POST /api/line/webhook", () => {
       const forged = createHmac("sha256", "other-secret").update(raw, "utf8").digest("base64");
 
       const res = await POST(makeRequest(raw, { signature: forged }));
+
       expect(res.status).toBe(401);
       expect(fetchMock).not.toHaveBeenCalled();
     });
@@ -94,31 +94,69 @@ describe("POST /api/line/webhook", () => {
       const raw = `{ "destination":"U1",\n  "events": [${JSON.stringify(textEvent("บอทจ๋า", oneToOne))}] }`;
 
       const res = await POST(makeRequest(raw));
+
       expect(res.status).toBe(200);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+  });
 
+  describe("broken requests", () => {
     it("rejects an oversized body before doing any work", async () => {
       const res = await POST(
         makeRequest({ destination: "U1", events: [] }, { headers: { "content-length": "999999999" } }),
       );
+
       expect(res.status).toBe(413);
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalled();
+    });
+
+    it("answers 400 instead of throwing when the client disconnects mid-body", async () => {
+      const res = await POST(makeBrokenBodyRequest());
+
+      expect(res.status).toBe(400);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(logged()).toContain("body");
+    });
+
+    it("answers 503 when the LINE env is missing, so LINE Verify fails loudly", async () => {
+      vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", undefined);
+
+      const res = await POST(makeRequest({ destination: "U1", events: [] }));
+
+      expect(res.status).toBe(503);
+      expect(logged()).toContain("LINE_CHANNEL_ACCESS_TOKEN");
+    });
+
+    it("answers 503 when an env value has a space in it", async () => {
+      vi.stubEnv("LINE_CHANNEL_SECRET", "bad secret with spaces");
+
+      const res = await POST(makeRequest({ destination: "U1", events: [] }));
+      expect(res.status).toBe(503);
     });
   });
 
   describe("always answers 200 once the signature is valid", () => {
     it("logs and returns 200 for invalid json", async () => {
       const res = await POST(makeRequest("{not json"));
+
       expect(res.status).toBe(200);
       expect(fetchMock).not.toHaveBeenCalled();
       expect(errorSpy).toHaveBeenCalled();
     });
 
-    it("logs and returns 200 for a body without events", async () => {
-      const res = await POST(makeRequest({ destination: "U1", events: "nope" }));
+    it("logs and returns 200 when the body has no events key at all", async () => {
+      const res = await POST(makeRequest({ destination: "U1" }));
+
       expect(res.status).toBe(200);
-      expect(errorSpy).toHaveBeenCalled();
+      expect(logged()).toContain("events");
+    });
+
+    it("logs and returns 200 when destination is missing", async () => {
+      const res = await POST(makeRequest({ events: [] }));
+
+      expect(res.status).toBe(200);
+      expect(logged()).toContain("destination");
     });
 
     it("skips one unsupported event but still handles the others", async () => {
@@ -126,7 +164,7 @@ describe("POST /api/line/webhook", () => {
         makeRequest({
           destination: "U1",
           events: [
-            { type: "message", source: { type: "square", squareId: "S1" }, message: { type: "text", text: "บอทจ๋า" } },
+            { type: "message", replyToken: 12345, source: group, message: { type: "text", text: "บอทจ๋า" } },
             textEvent("บอทจ๋า", oneToOne, "reply-token-2"),
           ],
         }),
@@ -135,62 +173,98 @@ describe("POST /api/line/webhook", () => {
       expect(res.status).toBe(200);
       expect(errorSpy).toHaveBeenCalled();
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(replyBody(fetchMock.mock.calls[0] as FetchCall).replyToken).toBe("reply-token-2");
+      expect(replies()[0]?.replyToken).toBe("reply-token-2");
     });
 
-    it("returns 200 and does not call LINE when the access token is unusable", async () => {
-      vi.stubEnv("LINE_CHANNEL_ACCESS_TOKEN", "bad token with space");
+    it("skips an absurdly long reply token instead of sending it to LINE", async () => {
+      await POST(
+        makeRequest({
+          destination: "U1",
+          events: [textEvent("บอทจ๋า", oneToOne, "x".repeat(5000))],
+        }),
+      );
 
-      const res = await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า", oneToOne)] }));
-      expect(res.status).toBe(200);
       expect(fetchMock).not.toHaveBeenCalled();
-      expect(errorSpy).toHaveBeenCalled();
+      expect(logged()).toContain("replyToken");
     });
 
     it("returns 200 when the LINE reply API fails", async () => {
-      fetchMock.mockResolvedValue(new Response("bad request", { status: 400 }));
+      fetchMock.mockImplementation(async () => new Response("bad request", { status: 400 }));
 
       const res = await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า", oneToOne)] }));
+
       expect(res.status).toBe(200);
       expect(errorSpy).toHaveBeenCalled();
     });
 
-    it("redacts the access token from logs when fetch throws with it", async () => {
-      fetchMock.mockRejectedValue(new TypeError(`Headers.append: "Bearer ${TOKEN}" is invalid.`));
+    it("keeps both secrets out of the logs when fetch throws with them", async () => {
+      fetchMock.mockImplementation(async () => {
+        throw new TypeError("fetch failed", {
+          cause: new Error(`Bearer ${TOKEN} signed with ${SECRET}`),
+        });
+      });
 
       await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า", oneToOne)] }));
 
-      const logged = errorSpy.mock.calls.flat().join(" ");
-      expect(logged).not.toContain(TOKEN);
-      expect(logged).toContain("[redacted]");
+      expect(logged()).not.toContain(TOKEN);
+      expect(logged()).not.toContain(SECRET);
+      expect(logged()).toContain("[redacted]");
     });
   });
 
   describe("who gets an answer", () => {
-    it("ignores group text without the wake word", async () => {
+    it("ignores group text without the wake word, without logging", async () => {
       const res = await POST(makeRequest({ destination: "U1", events: [textEvent("ใครตีบ้าง", group)] }));
+
       expect(res.status).toBe(200);
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
     });
 
     it("stays silent in a group until the router exists", async () => {
       // spec §18 Router ยังไม่ได้ทำ จึงยังไม่มีคำตอบสำหรับคำสั่งในกลุ่ม
       await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า เปิดตี", group)] }));
+
       expect(fetchMock).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
     });
 
     it("tells 1:1 chat users the bot is group-only", async () => {
       await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า เปิดตี", oneToOne)] }));
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(replyBody(fetchMock.mock.calls[0] as FetchCall).messages).toEqual([
-        { type: "text", text: GROUP_ONLY_TEXT },
-      ]);
+      expect(replies()[0]?.messages).toEqual([{ type: "text", text: GROUP_ONLY_TEXT }]);
     });
 
     it("treats a multi-person room as not a group", async () => {
       await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า เปิดตี", room)] }));
-      expect(replyBody(fetchMock.mock.calls[0] as FetchCall).messages[0]?.text).toBe(GROUP_ONLY_TEXT);
+
+      expect(replies()[0]?.messages[0]?.text).toBe(GROUP_ONLY_TEXT);
+    });
+
+    it("answers source types LINE may add later, instead of dropping them", async () => {
+      const square = { type: "square", squareId: "S1", squareChatId: "SC1", userId: "U1" };
+
+      await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า เปิดตี", square)] }));
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(replies()[0]?.messages[0]?.text).toBe(GROUP_ONLY_TEXT);
+    });
+
+    it("still answers a group event that arrives without groupId", async () => {
+      await POST(
+        makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า", { type: "group", userId: "U1" })] }),
+      );
+
+      // ยังถือว่าเป็นกลุ่ม จึงเงียบเหมือนกลุ่มปกติ ไม่ใช่ถูกทิ้งทั้ง event
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it("ignores an event with no source at all", async () => {
+      await POST(makeRequest({ destination: "U1", events: [textEvent("บอทจ๋า เปิดตี", undefined)] }));
+
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("ignores 1:1 chat text without the wake word", async () => {
@@ -208,11 +282,13 @@ describe("POST /api/line/webhook", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("greets when joining a group", async () => {
+    it("greets when joining a group, without promising commands yet", async () => {
       await POST(makeRequest({ destination: "U1", events: [{ type: "join", replyToken: "rt", source: group }] }));
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(replyBody(fetchMock.mock.calls[0] as FetchCall).messages[0]?.text).toContain("บอทจ๋า");
+      const text = replies()[0]?.messages[0]?.text ?? "";
+      expect(text).toContain("บอทจ๋า");
+      expect(text).toContain("ยังสั่งงานไม่ได้");
     });
 
     it("does not greet on join-like events from other sources", async () => {
@@ -236,6 +312,7 @@ describe("POST /api/line/webhook", () => {
           events: [{ type: "unsend", replyToken: "rt", source: group, unsend: { messageId: "1" } }],
         }),
       );
+
       expect(res.status).toBe(200);
       expect(fetchMock).not.toHaveBeenCalled();
     });
@@ -255,8 +332,40 @@ describe("POST /api/line/webhook", () => {
       );
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      const tokens = fetchMock.mock.calls.map((call) => replyBody(call as FetchCall).replyToken);
-      expect(tokens).toEqual(["reply-token-a", "reply-token-b"]);
+      expect(replies().map((body) => body.replyToken)).toEqual(["reply-token-a", "reply-token-b"]);
+    });
+
+    it("caps how many events one request may fan out to", async () => {
+      const events = Array.from({ length: 60 }, (_, index) =>
+        textEvent("บอทจ๋า", oneToOne, `reply-token-${index}`),
+      );
+
+      const res = await POST(makeRequest({ destination: "U1", events }));
+
+      expect(res.status).toBe(200);
+      expect(fetchMock).toHaveBeenCalledTimes(50);
+      expect(logged()).toContain("over the limit");
+    });
+
+    it("does not fire every reply at once", async () => {
+      let inFlight = 0;
+      let peak = 0;
+      fetchMock.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return new Response("{}", { status: 200 });
+      });
+
+      const events = Array.from({ length: 20 }, (_, index) =>
+        textEvent("บอทจ๋า", oneToOne, `reply-token-${index}`),
+      );
+
+      await POST(makeRequest({ destination: "U1", events }));
+
+      expect(fetchMock).toHaveBeenCalledTimes(20);
+      expect(peak).toBeLessThanOrEqual(5);
     });
   });
 

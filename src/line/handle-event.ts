@@ -1,12 +1,13 @@
 import type { TextMessage } from "@/lib/line";
-import { hasWakeWord } from "@/router/wake-word";
+import { hasWakeWord, WAKE_WORD } from "@/router/wake-word";
 import type { LineEvent } from "./webhook-schema";
 
 export type ReplyFn = (replyToken: string, messages: TextMessage[]) => Promise<void>;
 
-export const MESSAGES = {
+const MESSAGES = {
   groupOnly: "ℹ️ บอทนี้ใช้งานได้ใน LINE Group เท่านั้น",
-  joinGroup: '🏸 สวัสดีครับ บอทจ๋ามาแล้ว!\n\nพิมพ์ "บอทจ๋า" นำหน้าข้อความเพื่อเรียกใช้งานได้เลย',
+  // ยังไม่มี Router (spec §18) จึงต้องไม่สัญญาว่าสั่งงานได้แล้ว
+  joinGroup: `🏸 สวัสดีครับ บอทจ๋ามาแล้ว!\n\nตอนนี้ยังสั่งงานไม่ได้นะ กำลังติดตั้งระบบอยู่\nพร้อมเมื่อไหร่จะบอกในกลุ่มนี้ แล้วค่อยเรียกด้วยคำว่า "${WAKE_WORD}" ได้เลย`,
 } as const;
 
 /**
@@ -14,14 +15,19 @@ export const MESSAGES = {
  * แยกจากการส่งจริงเพื่อให้ทดสอบ logic ได้โดยไม่เรียก LINE API
  */
 function resolveReply(event: LineEvent): TextMessage[] | null {
-  if (event.type === "join" && event.source?.type === "group") {
+  const source = event.source;
+  // ไม่รู้ว่ามาจากไหนก็ตอบไม่ได้ ทั้ง join และ message ใช้เกณฑ์เดียวกัน
+  if (!source) return null;
+
+  if (event.type === "join" && source.type === "group") {
     return [{ type: "text", text: MESSAGES.joinGroup }];
   }
 
   if (event.type !== "message" || event.message?.type !== "text") return null;
   if (!hasWakeWord(event.message.text ?? "")) return null;
 
-  if (event.source?.type !== "group") {
+  // ทุก source ที่ไม่ใช่ group (user, room และ type ใหม่ ๆ ของ LINE) ได้คำตอบเดียวกัน
+  if (source.type !== "group") {
     return [{ type: "text", text: MESSAGES.groupOnly }];
   }
 

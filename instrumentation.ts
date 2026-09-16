@@ -1,15 +1,26 @@
 /**
  * ตรวจ environment variables ตอน start ตาม spec §24
- * ไม่ throw เพราะจะทำให้ server ตายทั้งตัว แต่ log ให้เห็นชัดตั้งแต่ deploy แรก
+ * ห้าม throw เพราะจะทำให้ server ตายทั้งตัว (webhook ตอบ 503 พร้อมเหตุผลอยู่แล้วถ้า env ไม่ครบ)
+ * import ต้องอยู่ใน try ด้วย ไม่งั้น module ที่โหลดไม่ขึ้นจะทำให้ hook นี้ throw เสียเอง
  */
 export async function register(): Promise<void> {
-  const { getLineEnv } = await import("@/lib/env");
-  const { formatErrorForLog } = await import("@/lib/log");
-
   try {
-    getLineEnv();
-    console.log("[startup] LINE environment variables OK");
+    const [{ getLineEnv }, { formatErrorForLog }] = await Promise.all([
+      import("@/lib/env"),
+      import("@/lib/log"),
+    ]);
+
+    try {
+      getLineEnv();
+      console.log("[startup] LINE environment variables OK");
+    } catch (error) {
+      console.error("[startup] LINE environment variables are not usable:", formatErrorForLog(error));
+    }
   } catch (error) {
-    console.error("[startup]", formatErrorForLog(error));
+    // ถึงตรงนี้แปลว่าโหลด module ไม่ได้ จึงยังใช้ formatErrorForLog ไม่ได้
+    console.error(
+      "[startup] could not run the environment check:",
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }

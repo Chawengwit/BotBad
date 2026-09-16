@@ -13,6 +13,10 @@ describe("hasWakeWord", () => {
     "บอทจ๋าเปิดตี",
     "  บอทจ๋า   ใครตีบ้าง  ",
     "บอทจ๋า",
+    " บอทจ๋า เปิดตี", // non-breaking space
+    "​บอทจ๋า เปิดตี", // zero-width space ที่มักติดมาตอน copy
+    "‎บอทจ๋า เปิดตี", // left-to-right mark
+    "﻿บอทจ๋า เปิดตี", // BOM
   ])("accepts %j", (text) => {
     expect(hasWakeWord(text)).toBe(true);
   });

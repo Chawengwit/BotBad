@@ -1,3 +1,5 @@
+import { truncate } from "./log";
+
 const LINE_REPLY_ENDPOINT = "https://api.line.me/v2/bot/message/reply";
 const REPLY_TIMEOUT_MS = 5_000;
 const MAX_ERROR_DETAIL_LENGTH = 300;
@@ -21,7 +23,7 @@ export async function replyMessages(
   });
 
   if (!response.ok) {
-    const detail = (await response.text().catch(() => "")).slice(0, MAX_ERROR_DETAIL_LENGTH);
-    throw new Error(`LINE reply failed: ${response.status} ${detail}`);
+    const detail = await response.text().catch(() => "");
+    throw new Error(`LINE reply failed: ${response.status} ${truncate(detail, MAX_ERROR_DETAIL_LENGTH)}`);
   }
 }
