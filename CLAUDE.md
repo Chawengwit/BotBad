@@ -2,7 +2,7 @@
 
 กฎของโปรเจคนี้ ใช้กับ AI CLI / AI Agent ทุกตัวที่ทำงานในโปรเจคนี้
 
-Specification หลัก: `Badminton LINE Bot — MVP Specification.md`
+Specification หลัก: `docs/specification.md`
 
 ---
 

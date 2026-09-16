@@ -1,7 +1,7 @@
 # 🏸 Badminton LINE Bot — MVP Specification
 
 > เอกสารที่เกี่ยวข้อง:
-> - `LLM Design.md` — System Prompt, Rules, Tool Declarations, Tool Loop
+> - `docs/llm-design.md` — System Prompt, Rules, Tool Declarations, Tool Loop
 > - `CLAUDE.md` — กฎการทำงานของโปรเจค
 
 ---
@@ -104,7 +104,7 @@ Bot:
 - ใช้ Function Calling (Tools)
 - มี System Prompt + Rules กำกับเสมอ
 - ชื่อ model กำหนดผ่าน env `GEMINI_MODEL`
-- รายละเอียดทั้งหมดอยู่ใน `LLM Design.md`
+- รายละเอียดทั้งหมดอยู่ใน `docs/llm-design.md`
 
 ## Validation
 
@@ -249,7 +249,7 @@ LLM → ข้อความตอบ:
 
 Application ส่งข้อความนี้ไป LINE
 
-รายละเอียด Tool ทั้งหมดดูที่ `LLM Design.md`
+รายละเอียด Tool ทั้งหมดดูที่ `docs/llm-design.md`
 
 ---
 
@@ -975,7 +975,7 @@ action=reject&pending_id=<uuid>
 บอทจ๋า รอบพรุ่งนี้คนเต็มหรือยัง
 ```
 
-สรุปข้อกำหนด (รายละเอียดใน `LLM Design.md`):
+สรุปข้อกำหนด (รายละเอียดใน `docs/llm-design.md`):
 
 - มี System Prompt + Rules ทุก request
 - Tools ที่ประกาศ:
@@ -1427,11 +1427,37 @@ Responsibilities:
 
 หมายเหตุ:
 
-- `replyToken` ใช้ได้ครั้งเดียวและมีอายุสั้น ต้องตอบให้เสร็จเร็ว (Gemini timeout ดู `LLM Design.md`)
+- `replyToken` ใช้ได้ครั้งเดียวและมีอายุสั้น ต้องตอบให้เสร็จเร็ว (Gemini timeout ดู `docs/llm-design.md`)
 - Reply API ส่งได้สูงสุด 5 message ต่อครั้ง ถ้าเกินต้องตัดก่อนส่ง ไม่ปล่อยให้ LINE ปฏิเสธทั้งชุด
 - รับได้สูงสุด 10 event ต่อ 1 request และทำทีละ 5 event พร้อมกัน
   เพื่อไม่ให้ handler ใช้เวลานานจน LINE ถือว่า timeout แล้วส่งซ้ำด้วย replyToken ที่ใช้ไปแล้ว
 - MVP ใช้ Reply API เท่านั้น ไม่ใช้ Push API (ประหยัดโควตา)
+
+## ข้อจำกัด: 1 กลุ่ม = 1 Official Account
+
+LINE ยอมให้มี **LINE Official Account ได้แค่ตัวเดียวต่อ 1 group / multi-person chat**
+
+> "At any time, only one LINE Official Account can be in a group chat or multi-person chat."
+> — [LINE Developers — Group chats and multi-person chats](https://developers.line.biz/en/docs/messaging-api/group-chats/)
+
+ถ้ากลุ่มนั้นมี OA ตัวอื่นอยู่ก่อนแล้ว (เช่น ขุนทอง ที่กลุ่มแบดนิยมใช้หารค่าสนาม) Bot จะเข้ากลุ่มไม่ได้
+และ webhook จะ **ไม่ได้รับ event `join` เลย** ใครเข้าก่อนได้ก่อน ไม่เกี่ยวกับว่าบัญชีไหน verified
+
+[FAQ ของ LINE](https://developers.line.biz/en/faq/tags/group-chats/) ระบุสาเหตุที่ OA ออกจากกลุ่มเองไว้ 2 ข้อ:
+
+1. setting `เข้าร่วมในแชท` ของ OA เป็น "ไม่อนุญาตให้เข้าร่วมกลุ่มหรือแชทแบบหลายคน"
+2. มี OA ตัวอื่นอยู่ในกลุ่มนั้นแล้ว
+
+อาการที่เห็นในแชท (ยืนยันด้วยการทดสอบจริง 16 ก.ย. 2026):
+
+| ข้อความในกลุ่ม | ความหมาย |
+| --- | --- |
+| `added <bot>` แล้วตามด้วย `<bot> left the group` ทันที | ถูก LINE เตะออก |
+| `invited <bot> ... Wait for them to join` แล้วค้าง | ไม่ได้เข้ากลุ่ม |
+| `<bot> joined the group` แล้วตามด้วยข้อความแนะนำตัว | เข้าสำเร็จ |
+
+ข้อ 2 แก้ที่ code ไม่ได้ ต้องเอา OA ตัวเดิมออกจากกลุ่มก่อน หรือแยกกลุ่มจัดก๊วนออกจากกลุ่มหลัก
+เอกสารติดตั้งต้องบอกเรื่องนี้ไว้ให้ชัด
 
 ---
 
@@ -1545,9 +1571,14 @@ badminton-line-bot/
 │
 ├── tests/
 │
+├── docs/
+│   ├── specification.md
+│   └── llm-design.md
+│
 ├── .env.example
 ├── package.json
 ├── tsconfig.json
+├── CLAUDE.md
 └── README.md
 ```
 
@@ -1573,7 +1604,7 @@ LLM layer เรียกได้แค่ Service ผ่าน Tool Executor �
 
 Bot ต้องตอบกรณีผิดพลาดอย่างชัดเจน
 
-Error code ใช้ร่วมกันระหว่าง Service, Rule-based และ Tool Result (ดู `LLM Design.md`)
+Error code ใช้ร่วมกันระหว่าง Service, Rule-based และ Tool Result (ดู `docs/llm-design.md`)
 
 | Code | ข้อความ (Rule-based) |
 |---|---|
@@ -1841,7 +1872,7 @@ Bot:
 ก่อนเขียน code ให้ AI CLI:
 
 1. อ่าน `CLAUDE.md` และปฏิบัติตามกฎ (ห้ามเริ่ม code / git / แก้ database ก่อนได้รับคำสั่ง)
-2. อ่าน specification นี้และ `LLM Design.md` ทั้งหมด
+2. อ่าน specification นี้และ `docs/llm-design.md` ทั้งหมด
 3. สรุป architecture ที่จะใช้
 4. ตรวจ dependency ที่จำเป็น
 5. ห้ามเพิ่ม feature นอก MVP

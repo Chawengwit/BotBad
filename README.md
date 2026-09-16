@@ -2,9 +2,9 @@
 
 LINE Bot สำหรับจัดรอบตีแบดใน LINE Group
 
-- Spec: `Badminton LINE Bot — MVP Specification.md`
-- LLM: `LLM Design.md`
-- กฎโปรเจค: `CLAUDE.md`
+- Spec: [`docs/specification.md`](docs/specification.md)
+- LLM: [`docs/llm-design.md`](docs/llm-design.md)
+- กฎโปรเจค: [`CLAUDE.md`](CLAUDE.md)
 
 ## สถานะ
 

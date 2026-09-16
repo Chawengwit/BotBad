@@ -1,6 +1,6 @@
 # 🤖 LLM Design — Badminton LINE Bot
 
-> เอกสารนี้ขยายความ §5 และ §19 ของ `Badminton LINE Bot — MVP Specification.md`
+> เอกสารนี้ขยายความ §5 และ §19 ของ `docs/specification.md`
 > ถ้าขัดกัน ให้ยึด Specification หลัก
 
 ---
