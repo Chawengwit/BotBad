@@ -14,6 +14,7 @@ export type NewGame = {
   maxPlayers: number;
   courtName: string;
   locationUrl?: string | null;
+  promptpay?: string | null;
 };
 
 /** รอบที่ยังเปิดอยู่ของกลุ่ม มีได้มากสุด 1 รอบ (spec §7) */
@@ -32,18 +33,37 @@ export async function findOpenGame(
            max_players,
            status,
            court_name,
-           location_url
+           location_url,
+           promptpay
     FROM games
     WHERE line_group_id = ${lineGroupId} AND status = 'open'
   `;
   return rows[0] ?? null;
 }
 
+/**
+ * เลขพร้อมเพย์ที่กลุ่มนี้ใช้ล่าสุด เอาไว้เสนอเป็นปุ่ม "ใช้อันเดิม"
+ * จะได้ไม่ต้องพิมพ์ใหม่ทุกสัปดาห์ (PRP bill-splitting §6)
+ */
+export async function findLatestPromptPay(
+  lineGroupId: string,
+  sql: Queryable = getSql(),
+): Promise<string | null> {
+  const rows = await sql<{ promptpay: string }[]>`
+    SELECT promptpay
+    FROM games
+    WHERE line_group_id = ${lineGroupId} AND promptpay IS NOT NULL
+    ORDER BY id DESC
+    LIMIT 1
+  `;
+  return rows[0]?.promptpay ?? null;
+}
+
 export async function insertGame(game: NewGame, sql: Queryable = getSql()): Promise<GameRow> {
   const rows = await sql<GameRow[]>`
     INSERT INTO games (
       line_group_id, created_by, play_date, start_time,
-      duration_minutes, court_count, max_players, court_name, location_url
+      duration_minutes, court_count, max_players, court_name, location_url, promptpay
     )
     VALUES (
       ${game.lineGroupId},
@@ -54,7 +74,8 @@ export async function insertGame(game: NewGame, sql: Queryable = getSql()): Prom
       ${game.courtCount},
       ${game.maxPlayers},
       ${game.courtName},
-      ${game.locationUrl ?? null}
+      ${game.locationUrl ?? null},
+      ${game.promptpay ?? null}
     )
     RETURNING id,
               line_group_id,
@@ -66,7 +87,8 @@ export async function insertGame(game: NewGame, sql: Queryable = getSql()): Prom
               max_players,
               status,
               court_name,
-              location_url
+              location_url,
+              promptpay
   `;
 
   const created = rows[0];
@@ -82,6 +104,7 @@ export type GamePatch = {
   maxPlayers?: number;
   courtName?: string;
   locationUrl?: string;
+  promptpay?: string;
 };
 
 /** แก้ไขรอบ ส่งเฉพาะช่องที่จะเปลี่ยน (spec §15) */
@@ -99,6 +122,7 @@ export async function updateGame(
         max_players = COALESCE(${patch.maxPlayers ?? null}::int, max_players),
         court_name = COALESCE(${patch.courtName ?? null}::text, court_name),
         location_url = COALESCE(${patch.locationUrl ?? null}::text, location_url),
+        promptpay = COALESCE(${patch.promptpay ?? null}::text, promptpay),
         updated_at = now()
     WHERE id = ${gameId}
     RETURNING id,
@@ -111,7 +135,8 @@ export async function updateGame(
               max_players,
               status,
               court_name,
-              location_url
+              location_url,
+              promptpay
   `;
 
   const updated = rows[0];

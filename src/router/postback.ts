@@ -3,7 +3,7 @@ import { AppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
 import { addDays, DATE_PATTERN, TIME_PATTERN, todayInBangkok } from "@/lib/time";
 import { actionRejected, gameCancelled, gameCard, gameClosed } from "@/line/messages";
-import { findOpenGame } from "@/repositories/game.repository";
+import { findLatestPromptPay, findOpenGame } from "@/repositories/game.repository";
 import {
   expirePendingAction,
   findUsablePendingAction,
@@ -27,7 +27,7 @@ const postbackSchema = z.discriminatedUnion("action", [
     action: z.literal("wizard"),
     pending_id: z.uuid(),
     // field = เลือกว่าจะแก้อะไร (เฉพาะตอนแก้ไขรอบ) ที่เหลือคือค่าที่เลือกมา
-    step: z.enum(["field", "court", "max", "date", "time", "duration", "location"]),
+    step: z.enum(["field", "court", "max", "date", "time", "duration", "location", "promptpay"]),
     value: z.string().min(1).max(40),
   }),
   z.object({ action: z.literal("confirm"), pending_id: z.uuid() }),
@@ -98,6 +98,7 @@ const EDIT_FIELD_QUESTIONS = {
   duration: "duration_minutes",
   name: "court_name",
   location: "location_url",
+  promptpay: "promptpay",
 } as const;
 
 async function handleConfirm(
@@ -151,13 +152,19 @@ async function handleEditFieldChoice(
   if (!game) throw new AppError("NO_OPEN_GAME");
 
   // ช่องที่ต้องพิมพ์ตอบ ต้องจำไว้ว่ากำลังรอคำตอบอะไรอยู่
-  if (field === "court_name" || field === "location_url") {
-    const awaiting = field === "court_name" ? "court_name" : "location";
+  const AWAITING_BY_FIELD = {
+    court_name: "court_name",
+    location_url: "location",
+    promptpay: "promptpay",
+  } as const;
+  const awaiting = AWAITING_BY_FIELD[field as keyof typeof AWAITING_BY_FIELD];
+  if (awaiting) {
     const saved = await updatePendingPayload(pending.id, { awaiting });
     if (!saved) throw new AppError("PENDING_EXPIRED");
   }
 
-  return [questionFor(field, pending.id, game.court_count)];
+  const lastPromptPay = field === "promptpay" ? await findLatestPromptPay(lineGroupId) : null;
+  return [questionFor(field, pending.id, game.court_count, lastPromptPay)];
 }
 
 /**
@@ -194,6 +201,26 @@ export async function handlePostback(
   if (parsed.step === "field") {
     if (pending.action_type !== "edit_game") throw new AppError("INTERNAL_ERROR");
     return handleEditFieldChoice(pending, input.lineGroupId, parsed.value);
+  }
+
+  if (parsed.step === "promptpay") {
+    // ปุ่มบนคำถามเลขพร้อมเพย์มีสองอย่าง: ข้ามไปเลย หรือใช้เลขเดิมของกลุ่ม
+    if (parsed.value !== "skip" && parsed.value !== "reuse") throw new AppError("INTERNAL_ERROR");
+
+    const lastUsed = parsed.value === "reuse" ? await findLatestPromptPay(input.lineGroupId) : null;
+
+    if (pending.action_type === "edit_game") {
+      if (!lastUsed) {
+        await expirePendingAction(pending.id, input.lineGroupId);
+        return [actionRejected(pending.action_type)];
+      }
+      return advanceEditWizard(pending.id, input.lineGroupId, "promptpay", lastUsed);
+    }
+
+    return advanceCreateWizard(pending, {
+      promptpay_asked: true,
+      ...(lastUsed ? { promptpay: lastUsed } : {}),
+    });
   }
 
   if (parsed.step === "location") {

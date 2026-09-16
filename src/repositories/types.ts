@@ -32,6 +32,8 @@ export type GameRow = {
   court_name: string | null;
   /** ลิงก์แผนที่ ใส่หรือไม่ใส่ก็ได้ */
   location_url: string | null;
+  /** เลขพร้อมเพย์ที่จะให้โอนตอนคิดเงิน ตัวเลขล้วน 10 หรือ 13 หลัก */
+  promptpay: string | null;
 };
 
 export type PlayerStatus = "joined" | "cancelled";

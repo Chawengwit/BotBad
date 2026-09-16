@@ -16,6 +16,7 @@ const game: GameRow = {
   status: "open",
   court_name: "ABC Badminton",
   location_url: null,
+  promptpay: null,
 };
 
 // 2026-09-16 17:30 เวลาไทย

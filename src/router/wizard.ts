@@ -7,11 +7,16 @@ import {
   askDuration,
   askLocation,
   askMaxPlayers,
+  askPromptPay,
   askTime,
   confirmCreateGame,
   confirmEditGame,
 } from "@/line/messages";
-import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
+import {
+  countJoinedPlayers,
+  findLatestPromptPay,
+  findOpenGame,
+} from "@/repositories/game.repository";
 import {
   updatePendingPayload,
   type PendingActionRow,
@@ -22,9 +27,10 @@ import { gameDraftSchema, missingDraftFields, type DraftField } from "@/services
 
 /** คำถามของแต่ละช่อง ใช้ทั้งตอนเปิดรอบและตอนแก้ไข */
 export function questionFor(
-  field: DraftField | "location_url",
+  field: DraftField | "location_url" | "promptpay",
   pendingId: string,
   courtCount: number,
+  lastPromptPay: string | null = null,
 ): LineMessage {
   switch (field) {
     case "court_count":
@@ -41,6 +47,8 @@ export function questionFor(
       return askCourtName();
     case "location_url":
       return askLocation(pendingId);
+    case "promptpay":
+      return askPromptPay(pendingId, lastPromptPay);
   }
 }
 
@@ -67,6 +75,13 @@ export async function advanceCreateWizard(
   if (payload.location_url === undefined && payload.location_asked !== true) {
     await save(pending.id, { ...patch, awaiting: "location", location_asked: true });
     return [questionFor("location_url", pending.id, courtCount)];
+  }
+
+  // เลขพร้อมเพย์ก็ข้ามได้เหมือนกัน ถามครั้งเดียวจบ ไม่วนถามซ้ำ
+  if (payload.promptpay === undefined && payload.promptpay_asked !== true) {
+    const lastUsed = await findLatestPromptPay(pending.line_group_id);
+    await save(pending.id, { ...patch, awaiting: "promptpay", promptpay_asked: true });
+    return [questionFor("promptpay", pending.id, courtCount, lastUsed)];
   }
 
   await save(pending.id, { ...patch, awaiting: null });

@@ -7,6 +7,7 @@ import {
   locationUrlSchema,
   MAX_PLAYERS,
   MIN_PLAYERS,
+  promptPaySchema,
 } from "@/services/game.service";
 import { countJoinedPlayers, findOpenGame, updateGame, updateGameStatus } from "@/repositories/game.repository";
 import { lockOpenGame } from "@/repositories/player.repository";
@@ -32,6 +33,7 @@ export const editPatchSchema = z
     duration_minutes: z.number().int().positive().multipleOf(60),
     court_name: courtNameSchema,
     location_url: locationUrlSchema,
+    promptpay: promptPaySchema,
   })
   .partial();
 
@@ -162,6 +164,7 @@ export async function applyEditGame(
         durationMinutes: patch.duration_minutes,
         courtName: patch.court_name,
         locationUrl: patch.location_url,
+        promptpay: patch.promptpay,
       },
       tx,
     );

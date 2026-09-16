@@ -5,6 +5,7 @@ import {
   locationUrlSchema,
   MAX_PLAYERS,
   MIN_PLAYERS,
+  promptPaySchema,
 } from "@/services/game.service";
 import { DATE_PATTERN, TIME_PATTERN } from "@/lib/time";
 
@@ -41,6 +42,11 @@ const gameFields = {
   location_url: {
     type: Type.STRING,
     description: "ลิงก์แผนที่ของคอร์ท ใส่เฉพาะเมื่อผู้ใช้ให้ลิงก์มา",
+  },
+  promptpay: {
+    type: Type.STRING,
+    description:
+      "เลขพร้อมเพย์ที่ให้โอนตอนคิดเงิน เป็นเบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก ใส่เฉพาะเมื่อผู้ใช้บอกเลขมา",
   },
 };
 
@@ -99,6 +105,7 @@ const gameArgs = z
     duration_minutes: z.number().int().positive().multipleOf(60),
     court_name: courtNameSchema,
     location_url: locationUrlSchema,
+    promptpay: promptPaySchema,
   })
   .partial()
   .strict();

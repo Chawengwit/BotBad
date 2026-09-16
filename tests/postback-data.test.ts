@@ -15,6 +15,17 @@ describe("parsePostbackData", () => {
     });
   });
 
+  it("อ่านปุ่มของคำถามเลขพร้อมเพย์ได้", () => {
+    expect(
+      parsePostbackData(`action=wizard&pending_id=${PENDING_ID}&step=promptpay&value=reuse`),
+    ).toEqual({
+      action: "wizard",
+      pending_id: PENDING_ID,
+      step: "promptpay",
+      value: "reuse",
+    });
+  });
+
   it("อ่านปุ่มยืนยันและยกเลิกได้", () => {
     expect(parsePostbackData(`action=confirm&pending_id=${PENDING_ID}`)).toEqual({
       action: "confirm",

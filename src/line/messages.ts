@@ -150,6 +150,32 @@ export function askLocation(pendingId: string): TextMessage {
   );
 }
 
+/** เก็บเป็นตัวเลขล้วน แต่ตอนอ่านต้องเว้นวรรคให้เหมือนที่คนคุ้นเคย */
+export function formatPromptPay(digits: string): string {
+  if (digits.length === 10) return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`;
+  if (digits.length === 13) {
+    return `${digits.slice(0, 1)}-${digits.slice(1, 5)}-${digits.slice(5, 10)}-${digits.slice(10, 12)}-${digits.slice(12)}`;
+  }
+  return digits;
+}
+
+export function askPromptPay(pendingId: string, lastUsed: string | null): TextMessage {
+  return quickReplyText(
+    "💸 เลขพร้อมเพย์สำหรับตอนคิดเงิน?\n\nพิมพ์เบอร์มือถือหรือเลขบัตรประชาชนของคนรับโอน ถ้ายังไม่ใส่ก็กดข้ามได้",
+    [
+      ...(lastUsed
+        ? [
+            {
+              label: `ใช้ ${formatPromptPay(lastUsed)}`,
+              data: wizardData(pendingId, "promptpay", "reuse"),
+            },
+          ]
+        : []),
+      { label: "ข้าม", data: wizardData(pendingId, "promptpay", "skip") },
+    ],
+  );
+}
+
 /** ใช้เมื่อ Gemini ล่ม โควตาหมด หรือยังไม่ได้ตั้งค่า (LLM Design §9) */
 export function fallbackMenu(): TextMessage {
   return {
@@ -200,6 +226,7 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): ButtonsM
     `⏰ ${formatTimeRange(draft.start_time, draft.duration_minutes)}`,
     `🏟️ ${draft.court_count} คอร์ท · 👥 รับ ${draft.max_players} คน`,
     ...(draft.location_url ? ["📍 มีลิงก์แผนที่"] : []),
+    ...(draft.promptpay ? [`💸 พร้อมเพย์ ${formatPromptPay(draft.promptpay)}`] : []),
     "",
     "ยืนยันไหม?",
   ].join("\n");
@@ -257,6 +284,7 @@ export function editMenu(pendingId: string): TextMessage {
       { label: "⏱️ ระยะเวลา", value: "duration" },
       { label: "🏸 ชื่อคอร์ท", value: "name" },
       { label: "📍 แผนที่", value: "location" },
+      { label: "💸 พร้อมเพย์", value: "promptpay" },
     ].map((choice) => ({
       label: choice.label,
       data: wizardData(pendingId, "field", choice.value),
@@ -278,6 +306,10 @@ function changeLines(game: GameRow, patch: EditPatch): string[] {
   }
   if (patch.location_url !== undefined) {
     lines.push("📍 อัปเดตลิงก์แผนที่");
+  }
+  if (patch.promptpay !== undefined) {
+    const before = game.promptpay ? formatPromptPay(game.promptpay) : "(ยังไม่ระบุ)";
+    lines.push(`💸 พร้อมเพย์ ${before} → ${formatPromptPay(patch.promptpay)}`);
   }
   if (patch.play_date !== undefined) {
     lines.push(`📅 ${formatThaiDate(game.play_date)} → ${formatThaiDate(patch.play_date)}`);

@@ -129,7 +129,8 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
         lineGroupId,
         requestedBy: user.id,
         actionType: "create_game",
-        payload: { ...parsed, location_asked: true },
+        // มาทาง LLM คือได้ข้อมูลครบมาในประโยคเดียว ไม่ต้องให้ wizard ย้อนไปถามช่องที่ข้ามได้อีก
+        payload: { ...parsed, location_asked: true, promptpay_asked: true },
       });
 
       return ok({ status: "awaiting_confirmation" }, [confirmCreateGame(pending.id, parsed)]);

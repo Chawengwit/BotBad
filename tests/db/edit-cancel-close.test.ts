@@ -244,6 +244,43 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     expect(rows[0]).toMatchObject({ court_name: "คอร์ทใหม่เอี่ยม" });
   });
 
+  it("เพิ่มเลขพร้อมเพย์ทีหลังได้", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+
+    await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "💸 พร้อมเพย์"), owner.lineUserId), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("พร้อมเพย์");
+
+    await handleEvent(textEvent("081-234-5678", owner.lineUserId), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("081-234-5678");
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+
+    const rows = await sql`SELECT promptpay FROM games WHERE line_group_id = ${GROUP_ID}`;
+    expect(rows[0]).toMatchObject({ promptpay: "0812345678" });
+  });
+
+  it("เลขพร้อมเพย์ผิดรูปแบบจะถามใหม่ ไม่บันทึก", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+
+    await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "💸 พร้อมเพย์"), owner.lineUserId), context);
+    await handleEvent(textEvent("08123456", owner.lineUserId), context);
+
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("10 หลัก");
+
+    const rows = await sql`SELECT promptpay FROM games WHERE line_group_id = ${GROUP_ID}`;
+    expect(rows[0]).toMatchObject({ promptpay: null });
+  });
+
   it("คนที่ไม่ได้เปิดรอบ แก้ไข ยกเลิก หรือปิดรอบไม่ได้", async () => {
     const owner = await newUser("เชวง");
     const other = await newUser("Bank");

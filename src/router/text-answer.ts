@@ -1,11 +1,12 @@
 import { AppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
-import { askAgain, askLocation } from "@/line/messages";
+import { askAgain, askLocation, askPromptPay } from "@/line/messages";
 import {
   findAwaitingPendingAction,
   type PendingActionRow,
 } from "@/repositories/pending-action.repository";
-import { courtNameSchema, locationUrlSchema } from "@/services/game.service";
+import { findLatestPromptPay } from "@/repositories/game.repository";
+import { courtNameSchema, locationUrlSchema, promptPaySchema } from "@/services/game.service";
 import { advanceCreateWizard, advanceEditWizard } from "./wizard";
 
 const URL_IN_TEXT = /https?:\/\/[^\s]+/;
@@ -60,6 +61,22 @@ async function applyLocation(
   return advanceCreateWizard(pending, { location_url: url });
 }
 
+async function applyPromptPay(pending: PendingActionRow, text: string): Promise<LineMessage[]> {
+  const parsed = promptPaySchema.safeParse(text);
+  if (!parsed.success) {
+    return [
+      askAgain("💸 เลขพร้อมเพย์ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก"),
+      askPromptPay(pending.id, await findLatestPromptPay(pending.line_group_id)),
+    ];
+  }
+
+  if (pending.action_type === "edit_game") {
+    return advanceEditWizard(pending.id, pending.line_group_id, "promptpay", parsed.data);
+  }
+
+  return advanceCreateWizard(pending, { promptpay: parsed.data });
+}
+
 /**
  * ข้อความที่ไม่มี wake word จะถูกอ่านก็ต่อเมื่อบอทกำลังรอคำตอบจากคนคนนั้นอยู่จริง (spec §6)
  * คืน null แปลว่าไม่เกี่ยวกับบอท ให้เงียบไว้
@@ -78,6 +95,11 @@ export async function handleTextAnswer(input: {
   if (awaiting === "court_name") {
     if (input.text === undefined) return null;
     return applyCourtName(pending, input.text);
+  }
+
+  if (awaiting === "promptpay") {
+    if (input.text === undefined) return null;
+    return applyPromptPay(pending, input.text);
   }
 
   if (awaiting === "location") {

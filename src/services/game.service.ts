@@ -30,6 +30,19 @@ export const LOCATION_URL_MAX_LENGTH = 500;
 export const courtNameSchema = z.string().trim().min(1).max(COURT_NAME_MAX_LENGTH);
 export const locationUrlSchema = z.url().max(LOCATION_URL_MAX_LENGTH);
 
+/** เบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก ตรงกับ CHECK ในฐานข้อมูล (migration 007) */
+export const PROMPTPAY_PATTERN = /^(\d{10}|\d{13})$/;
+
+/**
+ * คนพิมพ์เลขพร้อมเพย์มาได้สารพัดแบบ (มีขีด มีเว้นวรรค ก็อปมาจากที่อื่น)
+ * เก็บเป็นตัวเลขล้วนเสมอ จะได้เทียบและแสดงผลได้แบบเดียวกันทุกที่
+ */
+export const promptPaySchema = z
+  .string()
+  .max(40)
+  .transform((value) => value.replace(/\D/g, ""))
+  .refine((digits) => PROMPTPAY_PATTERN.test(digits));
+
 export const gameDraftSchema = z.object({
   court_count: z.number().int().min(1).max(4),
   max_players: z.number().int().min(MIN_PLAYERS).max(MAX_PLAYERS),
@@ -39,6 +52,8 @@ export const gameDraftSchema = z.object({
   court_name: courtNameSchema,
   // ลิงก์แผนที่ ใส่หรือไม่ใส่ก็ได้ (spec §9)
   location_url: locationUrlSchema.optional(),
+  // เลขพร้อมเพย์สำหรับตอนคิดเงิน ใส่หรือไม่ใส่ก็ได้ (PRP bill-splitting §6)
+  promptpay: promptPaySchema.optional(),
 });
 
 export type GameDraft = z.infer<typeof gameDraftSchema>;
@@ -105,6 +120,7 @@ export async function confirmCreateGame(
           maxPlayers: draft.max_players,
           courtName: draft.court_name,
           locationUrl: draft.location_url ?? null,
+          promptpay: draft.promptpay ?? null,
         },
         tx,
       );

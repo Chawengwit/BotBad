@@ -20,7 +20,8 @@ export async function lockOpenGame(
            max_players,
            status,
            court_name,
-           location_url
+           location_url,
+           promptpay
     FROM games
     WHERE line_group_id = ${lineGroupId} AND status = 'open'
     FOR UPDATE

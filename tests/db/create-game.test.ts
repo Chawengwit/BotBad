@@ -143,15 +143,20 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ลิงก์แผนที่");
 
     await handleEvent(textEvent("อยู่ตรงนี้ https://maps.app.goo.gl/abc123", userId), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("พร้อมเพย์");
+
+    // พิมพ์มาแบบมีขีดคั่น ระบบต้องเก็บเป็นตัวเลขล้วนแต่แสดงผลให้อ่านง่าย
+    await handleEvent(textEvent("081-234-5678", userId), context);
     const confirmText = messageTexts(collected.at(-1)!.messages);
     expect(confirmText).toContain("ABC Badminton");
     expect(confirmText).toContain("รับ 16 คน");
+    expect(confirmText).toContain("พร้อมเพย์ 081-234-5678");
 
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("0/16 คน");
 
     const games = await sql`
-      SELECT court_count, max_players, court_name, location_url, status
+      SELECT court_count, max_players, court_name, location_url, promptpay, status
       FROM games WHERE line_group_id = ${GROUP_ID}
     `;
     expect(games[0]).toMatchObject({
@@ -159,6 +164,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
       max_players: 16,
       court_name: "ABC Badminton",
       location_url: "https://maps.app.goo.gl/abc123",
+      promptpay: "0812345678",
       status: "open",
     });
   });
@@ -171,15 +177,18 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await runUntilCourtName(userId, collected, { players: "20 คน" });
     await handleEvent(textEvent("คอร์ทลุงหมี", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
 
     const games = await sql`
-      SELECT max_players, court_name, location_url FROM games WHERE line_group_id = ${GROUP_ID}
+      SELECT max_players, court_name, location_url, promptpay
+      FROM games WHERE line_group_id = ${GROUP_ID}
     `;
     expect(games[0]).toMatchObject({
       max_players: 20,
       court_name: "คอร์ทลุงหมี",
       location_url: null,
+      promptpay: null,
     });
   });
 
@@ -191,6 +200,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await runUntilCourtName(userId, collected);
     await handleEvent(textEvent("คอร์ทริมน้ำ", userId), context);
     await handleEvent(locationEvent(userId, 13.7563, 100.5018), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
 
     const games = await sql<{ location_url: string }[]>`
@@ -241,6 +251,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await runUntilCourtName(userId, collected);
     await handleEvent(textEvent("คอร์ทแรก", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
 
     const second: Collected[] = [];
@@ -272,6 +283,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await runUntilCourtName(userId, collected);
     await handleEvent(textEvent("คอร์ทเดิม", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     const confirmData = actionData(collected.at(-1)!.messages, "✅ เปิดตี");
 
     await handleEvent(postbackEvent(confirmData, userId), context);
@@ -289,6 +301,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
 
     await runUntilCourtName(userId, collected);
     await handleEvent(textEvent("คอร์ทหมดอายุ", userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     const confirmData = actionData(collected.at(-1)!.messages, "✅ เปิดตี");
 
@@ -319,6 +332,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "1 ชั่วโมง"), userId), context);
     await handleEvent(textEvent("คอร์ทกลางคืน", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
 
     const confirmText = messageTexts(collected.at(-1)!.messages);
     expect(confirmText).toContain("อังคาร 15 ม.ค.");
@@ -339,6 +353,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "19:00"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "1 ชั่วโมง"), userId), context);
     await handleEvent(textEvent("คอร์ทย้อนอดีต", userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
 
     const confirmData = actionData(collected.at(-1)!.messages, "✅ เปิดตี");

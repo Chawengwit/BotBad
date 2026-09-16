@@ -197,7 +197,7 @@ R16. ห้ามทำรายการแทนสมาชิกคนอื
 | `list_players` | อ่าน | – | รายชื่อผู้เล่น |
 | `join_game` | เขียนทันที | – | ลงชื่อคนที่พิมพ์ |
 | `leave_game` | เขียนทันที | – | ถอนชื่อคนที่พิมพ์ |
-| `propose_create_game` | ขอยืนยัน | `court_count?`, `max_players?`, `play_date?`, `start_time?`, `duration_minutes?`, `court_name?`, `location_url?` | `MISSING_FIELDS` หรือสร้าง pending action |
+| `propose_create_game` | ขอยืนยัน | `court_count?`, `max_players?`, `play_date?`, `start_time?`, `duration_minutes?`, `court_name?`, `location_url?`, `promptpay?` | `MISSING_FIELDS` หรือสร้าง pending action |
 | `propose_edit_game` | ขอยืนยัน | ช่องเดียวกัน (optional ทั้งหมด) | สร้าง pending action |
 | `propose_cancel_game` | ขอยืนยัน | – | สร้าง pending action |
 | `propose_close_game` | ขอยืนยัน | – | สร้าง pending action |
@@ -226,6 +226,10 @@ const gameFields = {
   location_url: {
     type: Type.STRING,
     description: "ลิงก์แผนที่ของคอร์ท ใส่เฉพาะเมื่อผู้ใช้ให้ลิงก์มา",
+  },
+  promptpay: {
+    type: Type.STRING,
+    description: "เลขพร้อมเพย์ที่ให้โอนตอนคิดเงิน เบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก",
   },
   play_date: {
     type: Type.STRING,
