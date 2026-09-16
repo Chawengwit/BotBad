@@ -34,6 +34,40 @@ export function getLineAccessToken(): string {
   return readSecret("LINE_CHANNEL_ACCESS_TOKEN");
 }
 
+// connection string มีรหัสผ่านอยู่ข้างใน ห้ามเอาค่าไปใส่ใน error หรือ log
+const databaseUrlSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => /^postgres(ql)?:\/\//.test(value), "must start with postgresql://");
+
+// ชื่อ schema ต้องปลอดภัยพอที่จะต่อเข้า SQL ได้ตรง ๆ (ใช้เป็น startup parameter)
+const schemaSchema = z
+  .string()
+  .trim()
+  .regex(/^[a-z_][a-z0-9_]*$/, "must be a lowercase identifier")
+  .default("public");
+
+/** connection string ของ Supabase ใช้ transaction pooler (port 6543) */
+export function getDatabaseUrl(): string {
+  const parsed = databaseUrlSchema.safeParse(process.env.DATABASE_URL);
+  if (!parsed.success) {
+    const reasons = parsed.error.issues.map((issue) => issue.message).join(", ");
+    throw new Error(`Invalid DATABASE_URL: ${reasons}`);
+  }
+  return parsed.data;
+}
+
+/** schema ที่จะใช้ ปกติคือ public ส่วนตอนเทสใช้ schema แยกผ่าน DB_SCHEMA */
+export function getDatabaseSchema(): string {
+  const parsed = schemaSchema.safeParse(process.env.DB_SCHEMA ?? undefined);
+  if (!parsed.success) {
+    const reasons = parsed.error.issues.map((issue) => issue.message).join(", ");
+    throw new Error(`Invalid DB_SCHEMA: ${reasons}`);
+  }
+  return parsed.data;
+}
+
 /** ตรวจ env ของ LINE ทั้งหมด รายงานทุกตัวที่ผิดในทีเดียว */
 export function getLineEnv(): LineEnv {
   const values = {} as LineEnv;

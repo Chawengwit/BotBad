@@ -8,11 +8,14 @@ LINE Bot สำหรับจัดรอบตีแบดใน LINE Group
 
 ## สถานะ
 
-- [x] Next.js + Webhook `POST /api/line/webhook`
-- [x] ตรวจ LINE signature
-- [x] Wake word `บอทจ๋า` + ใช้ในกลุ่มเท่านั้น
-- [ ] Router / คำสั่งรอบตี (spec §18)
-- [ ] Database / Gemini
+ไล่ตามลำดับใน spec §29
+
+- [x] 1–4 Next.js + Webhook + ตรวจ LINE signature + Wake word `บอทจ๋า`
+- [x] Deploy ขึ้น Vercel และต่อกับ LINE จริงแล้ว (ทดสอบในกลุ่มผ่าน 2026-09-16)
+- [ ] 5 PostgreSQL (Supabase) + postgres.js + SQL migrations ← **ทำต่อจากนี้**
+- [ ] 6–13 คำสั่งรอบตี (create / join / leave / list / edit / cancel / close)
+- [ ] 14–15 LINE Flex + Router (spec §18)
+- [ ] 16–19 Gemini + Tools + Session + Fallback
 
 พฤติกรรมตอนนี้:
 
@@ -47,9 +50,13 @@ npm run dev                  # http://localhost:3000/api/line/webhook
 | คำสั่ง | ใช้ทำ |
 |---|---|
 | `npm run dev` | รัน dev server |
-| `npm test` | รัน tests (ไม่เรียก LINE API จริง) |
+| `npm test` | รัน tests (ไม่เรียก LINE API และไม่ต่อฐานข้อมูลจริง) |
 | `npm run typecheck` | ตรวจ TypeScript |
 | `npm run build` | build production |
+| `npm run migrate` | ดูว่ามี migration ค้างกี่ไฟล์ (ไม่แตะฐานข้อมูล) |
+| `npm run migrate -- --apply` | รัน migration จริงลง schema `public` |
+| `npm run migrate:test -- --apply` | รัน migration ลง schema `bot_test` |
+| `npm run test:db` | รัน tests ที่ต่อฐานข้อมูลจริง (schema `bot_test`) |
 
 ทดสอบ webhook กับ LINE จริงจากเครื่องตัวเอง ต้องเปิด tunnel (เช่น ngrok) แล้วเอา URL ไปใส่ใน LINE Console ชั่วคราว
 
@@ -59,15 +66,71 @@ npm run dev                  # http://localhost:3000/api/line/webhook
 |---|---|
 | `LINE_CHANNEL_SECRET` | ✅ ตรวจ signature |
 | `LINE_CHANNEL_ACCESS_TOKEN` | ✅ ส่ง reply |
+| `DATABASE_URL` | ✅ ต่อ Supabase (transaction pooler port 6543) |
+| `DB_SCHEMA` | ไม่บังคับ ค่าเริ่มต้น `public` ใช้ `bot_test` ตอนรันเทส |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | ยังไม่ใช้ |
-| `DATABASE_URL` | ยังไม่ใช้ |
+
+ห้าม commit ค่าจริง ใส่ใน `.env.local` (ถูก gitignore ไว้แล้ว) และใน Vercel เท่านั้น
 
 ## Deploy (Vercel)
 
-1. สร้างโปรเจคบน Vercel และตั้ง env `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN` (Production)
-2. Deploy
-3. LINE Developers Console → Messaging API:
-   - Webhook URL: `https://<vercel-domain>/api/line/webhook` → กด **Verify**
-   - เปิด **Use webhook**
-   - เปิด **Allow bot to join group chats**
-4. LINE Official Account Manager → ปิด **Auto-response messages**
+Deploy อัตโนมัติจาก branch `main` ของ GitHub
+
+| ค่า | ที่ใช้อยู่ |
+|---|---|
+| Vercel project | `bot-bad` |
+| Webhook URL | `https://bot-bad.vercel.app/api/line/webhook` |
+| Node.js version | 22.x (ตาม `engines` ใน package.json) |
+
+ตั้งค่าครั้งแรก:
+
+1. Import repo ใน Vercel แล้วใส่ env `LINE_CHANNEL_SECRET`, `LINE_CHANNEL_ACCESS_TOKEN`
+2. LINE Developers Console → Messaging API:
+   - Webhook URL → กด **Verify**
+   - เปิด **Use webhook** และ **Allow bot to join group chats**
+3. LINE Official Account Manager → ตั้งค่า → การตั้งค่าการตอบกลับ:
+   - แชท: ปิด
+   - ข้อความทักทายเพื่อนใหม่: ปิด
+   - ข้อความตอบกลับอัตโนมัติ: ปิด
+   - Webhook: เปิด
+
+### เช็กว่า deploy ใช้งานได้ไหม (ไม่ต้องใช้ secret)
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'x-line-signature: AAAA' -H 'content-type: application/json' \
+  --data '{"destination":"U1","events":[]}' \
+  https://bot-bad.vercel.app/api/line/webhook
+```
+
+- `401` = ปกติ env เข้าครบ (signature ปลอมเลยไม่ผ่าน)
+- `503` = env ของ LINE ขาดหรือรูปแบบผิด ดู Logs จะมีบรรทัด `[webhook] not configured:` บอกชื่อตัวแปร
+
+## Database
+
+Supabase PostgreSQL ต่อตรงด้วย `postgres` (postgres.js) ไม่ใช้ ORM ตาม spec §20
+
+- connection อยู่ที่ `src/lib/db.ts` ตั้ง `prepare: false` เพราะ transaction pooler ไม่รองรับ prepared statement
+- เลือก schema ด้วย startup parameter `search_path` (ทดสอบแล้วว่า pooler ของ Supabase รองรับ)
+- SQL ทั้งหมดอยู่ใน `src/repositories/` เท่านั้น
+
+### Migration
+
+ไฟล์ SQL เรียงตามลำดับใน `db/migrations/` และจดว่ารันอะไรไปแล้วในตาราง `schema_migrations`
+
+```bash
+npm run migrate                 # ดูรายการที่ค้าง ไม่แตะฐานข้อมูล
+npm run migrate -- --apply      # รันจริงลง public
+npm run migrate:test -- --apply # รันลง schema bot_test สำหรับเทส
+```
+
+แต่ละไฟล์รันอยู่ใน transaction เดียวพร้อมการบันทึกลง `schema_migrations` ถ้าพังกลางทางจะไม่ค้างครึ่ง ๆ
+
+ตาราง (รายละเอียดใน spec §20): `users`, `games`, `game_players`, `pending_actions`, `conversation_sessions`
+
+### Tests ที่ต่อฐานข้อมูล
+
+อยู่ใน `tests/db/` และจะถูกข้ามอัตโนมัติถ้าไม่ได้ตั้ง `DB_SCHEMA=bot_test`
+เทสพวกนี้อ่านค่าจาก `.env.local` เองและลบข้อมูลที่สร้างขึ้นหลังรันเสร็จ
+
+หมายเหตุ: โปรเจค Supabase แบบ Free จะถูก pause เมื่อไม่มีการใช้งานราวหนึ่งสัปดาห์ ต้องเข้าไปกด resume ใน dashboard
