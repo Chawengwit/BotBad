@@ -19,7 +19,8 @@ LINE Bot สำหรับจัดรอบตีแบดใน LINE Group
 - [x] 11–13 แก้ไข / ยกเลิก / ปิดรอบ (เฉพาะผู้สร้างรอบ)
 - [x] 16–19 Gemini + Tools + Session + Fallback (ทดสอบกับ Gemini จริงแล้ว 2026-09-16)
 - [x] Health check + cron กัน Supabase pause
-- [ ] 14 LINE Flex Message (ตอนนี้ใช้ buttons template) ← **เหลืออยู่ชิ้นเดียวของ MVP**
+- [ ] 14 LINE Flex Message (ตอนนี้ใช้ buttons template)
+- [ ] 22–23 เลขพร้อมเพย์ + คิดเงินหารค่าใช้จ่ายต่อรอบ — วางแผนไว้ใน [`docs/PRP/bill-splitting.md`](docs/PRP/bill-splitting.md)
 
 พฤติกรรมตอนนี้:
 
