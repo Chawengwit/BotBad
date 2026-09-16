@@ -942,6 +942,11 @@ Bot:
 | `แก้ไข` | Edit Menu (§15) |
 | `ยกเลิก` | Cancel Confirmation (§16) |
 | `ปิดรอบ` | Close Confirmation (§17) |
+| `คิดเงิน` | Bill Wizard (PRP bill-splitting §7) |
+| `บิล` | แสดงการ์ดบิลของกลุ่ม |
+| `ใครยังไม่จ่าย` | รายชื่อคนที่ยังไม่จ่าย |
+| `จ่ายแล้ว` / `ยังไม่จ่าย` | เปลี่ยนสถานะการจ่ายของตัวเอง |
+| `ยกเลิกบิล` | Cancel Bill Confirmation |
 
 ใช้ deterministic parser
 
@@ -956,6 +961,10 @@ action=list
 action=wizard&pending_id=<uuid>&step=court&value=2
 action=confirm&pending_id=<uuid>
 action=reject&pending_id=<uuid>
+action=wizard&pending_id=<uuid>&step=court_fee|shuttle_count|shuttle_price|extra&value=...
+action=bill_paid
+action=bill_unpaid
+action=bill_status
 ```
 
 - `action=join|leave|list` ทำกับรอบ `open` ของกลุ่มที่กด
@@ -1707,8 +1716,8 @@ Domain        → ไม่จำเป็น
 - [x] Buttons / Quick Reply
 - [ ] LINE Flex Message (ยังใช้ buttons template อยู่)
 - [x] เลขพร้อมเพย์ของรอบตี (ตั้งตอนเปิดรอบ / แก้ทีหลังได้)
-- [ ] คิดเงินและหารค่าใช้จ่ายต่อรอบ (ค่าคอร์ท / ลูกแบด / ค่าอื่น ๆ หารเท่า)
-- [ ] บันทึกว่าใครจ่ายแล้ว / ยังไม่จ่าย และเตือนตอนปิดรอบ
+- [x] คิดเงินและหารค่าใช้จ่ายต่อรอบ (ค่าคอร์ท / ลูกแบด / ค่าอื่น ๆ หารเท่า)
+- [x] บันทึกว่าใครจ่ายแล้ว / ยังไม่จ่าย และเตือนตอนปิดรอบ
 
 รายละเอียดของสามข้อล่างอยู่ใน `docs/PRP/bill-splitting.md`
 
@@ -1762,7 +1771,7 @@ Implement in this order:
 20. Tests
 21. Vercel deployment
 22. เลขพร้อมเพย์ของรอบตี ✅
-23. คิดเงิน + หารค่าใช้จ่าย + บันทึกการจ่าย
+23. คิดเงิน + หารค่าใช้จ่าย + บันทึกการจ่าย ✅ (เหลือฝั่งภาษาธรรมชาติ)
 ```
 
 ข้อ 22-23 ทำตามลำดับใน `docs/PRP/bill-splitting.md` §16

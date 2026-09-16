@@ -41,6 +41,30 @@ export async function findOpenGame(
   return rows[0] ?? null;
 }
 
+/** รอบตีตาม id ใช้กับบิลที่ยังตามเก็บเงินอยู่หลังรอบปิดไปแล้ว */
+export async function findGameById(
+  gameId: string,
+  sql: Queryable = getSql(),
+): Promise<GameRow | null> {
+  const rows = await sql<GameRow[]>`
+    SELECT id,
+           line_group_id,
+           created_by,
+           to_char(play_date, 'YYYY-MM-DD') AS play_date,
+           to_char(start_time, 'HH24:MI') AS start_time,
+           duration_minutes,
+           court_count,
+           max_players,
+           status,
+           court_name,
+           location_url,
+           promptpay
+    FROM games
+    WHERE id = ${gameId}
+  `;
+  return rows[0] ?? null;
+}
+
 /**
  * เลขพร้อมเพย์ที่กลุ่มนี้ใช้ล่าสุด เอาไว้เสนอเป็นปุ่ม "ใช้อันเดิม"
  * จะได้ไม่ต้องพิมพ์ใหม่ทุกสัปดาห์ (PRP bill-splitting §6)

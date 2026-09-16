@@ -3,6 +3,14 @@ import { askCourtCount, confirmCancelGame, confirmCloseGame, editMenu } from "@/
 import type { UserRow } from "@/repositories/types";
 import { startCancelGame, startCloseGame, startEditGame } from "@/services/game-admin.service";
 import { startCreateGame } from "@/services/game.service";
+import { unpaidSharesForGame } from "@/services/bill.service";
+import {
+  doCancelBill,
+  doMarkPayment,
+  doShowBill,
+  doStartBill,
+  doUnpaidList,
+} from "./bill-actions";
 import { doJoin, doLeave, doList } from "./game-actions";
 import { WAKE_WORD } from "./wake-word";
 
@@ -16,6 +24,12 @@ export const RULE_COMMANDS = [
   "แก้ไข",
   "ยกเลิก",
   "ปิดรอบ",
+  "คิดเงิน",
+  "บิล",
+  "ใครยังไม่จ่าย",
+  "จ่ายแล้ว",
+  "ยังไม่จ่าย",
+  "ยกเลิกบิล",
 ] as const;
 
 export type RuleCommand = (typeof RULE_COMMANDS)[number];
@@ -58,7 +72,19 @@ export async function handleRuleCommand(input: {
     }
     case "ปิดรอบ": {
       const { pending, game, joinedCount } = await startCloseGame(input.lineGroupId, input.user.id);
-      return [confirmCloseGame(pending.id, game, joinedCount)];
+      return [confirmCloseGame(pending.id, game, joinedCount, await unpaidSharesForGame(game.id))];
     }
+    case "คิดเงิน":
+      return doStartBill(input.lineGroupId, input.user);
+    case "บิล":
+      return doShowBill(input.lineGroupId);
+    case "ใครยังไม่จ่าย":
+      return doUnpaidList(input.lineGroupId);
+    case "จ่ายแล้ว":
+      return doMarkPayment(input.lineGroupId, input.user, true);
+    case "ยังไม่จ่าย":
+      return doMarkPayment(input.lineGroupId, input.user, false);
+    case "ยกเลิกบิล":
+      return doCancelBill(input.lineGroupId, input.user);
   }
 }

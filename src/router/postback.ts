@@ -2,7 +2,16 @@ import { z } from "zod";
 import { AppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
 import { addDays, DATE_PATTERN, TIME_PATTERN, todayInBangkok } from "@/lib/time";
-import { actionRejected, gameCancelled, gameCard, gameClosed } from "@/line/messages";
+import {
+  actionRejected,
+  askAmount,
+  askOtherItem,
+  billCancelled,
+  billCard,
+  gameCancelled,
+  gameCard,
+  gameClosed,
+} from "@/line/messages";
 import { findLatestPromptPay, findOpenGame } from "@/repositories/game.repository";
 import {
   expirePendingAction,
@@ -18,8 +27,10 @@ import {
   MAX_PLAYERS,
   MIN_PLAYERS,
 } from "@/services/game.service";
+import { confirmCancelBill, confirmCreateBill, unpaidSharesForGame } from "@/services/bill.service";
+import { doMarkPayment, doUnpaidList } from "./bill-actions";
 import { doJoin, doLeave, doList } from "./game-actions";
-import { advanceCreateWizard, advanceEditWizard, questionFor } from "./wizard";
+import { advanceBillWizard, advanceCreateWizard, advanceEditWizard, questionFor } from "./wizard";
 
 /** ข้อมูลที่แนบมากับปุ่ม เป็น query string และต้อง validate ทุกครั้ง (spec §18) */
 const postbackSchema = z.discriminatedUnion("action", [
@@ -27,7 +38,21 @@ const postbackSchema = z.discriminatedUnion("action", [
     action: z.literal("wizard"),
     pending_id: z.uuid(),
     // field = เลือกว่าจะแก้อะไร (เฉพาะตอนแก้ไขรอบ) ที่เหลือคือค่าที่เลือกมา
-    step: z.enum(["field", "court", "max", "date", "time", "duration", "location", "promptpay"]),
+    step: z.enum([
+      "field",
+      "court",
+      "max",
+      "date",
+      "time",
+      "duration",
+      "location",
+      "promptpay",
+      // ขั้นของ wizard คิดเงิน
+      "court_fee",
+      "shuttle_count",
+      "shuttle_price",
+      "extra",
+    ]),
     value: z.string().min(1).max(40),
   }),
   z.object({ action: z.literal("confirm"), pending_id: z.uuid() }),
@@ -36,6 +61,10 @@ const postbackSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("join") }),
   z.object({ action: z.literal("leave") }),
   z.object({ action: z.literal("list") }),
+  // ปุ่มบนการ์ดบิล ทำกับบิลที่ยังใช้งานอยู่ของกลุ่มนั้น ไม่ต้องอ้างบิล
+  z.object({ action: z.literal("bill_paid") }),
+  z.object({ action: z.literal("bill_unpaid") }),
+  z.object({ action: z.literal("bill_status") }),
 ]);
 
 export type PostbackParams = { date?: string; time?: string };
@@ -133,13 +162,18 @@ async function runConfirm(
       return [gameCancelled()];
     }
     case "close_game": {
-      await applyCloseGame(pending.id, lineGroupId, userId);
-      return [gameClosed()];
+      const { game } = await applyCloseGame(pending.id, lineGroupId, userId);
+      // บิลไม่ได้ปิดตามรอบ ยังตามเก็บเงินกันต่อได้ (PRP §5.7)
+      return [gameClosed(await unpaidSharesForGame(game.id))];
     }
-    case "create_bill":
-    case "cancel_bill":
-      // ยังไม่มีทางไหนสร้าง pending สองชนิดนี้ ต่อของจริงในขั้นถัดไปของ PRP §16
-      throw new AppError("INTERNAL_ERROR");
+    case "create_bill": {
+      const { game, bill, shares } = await confirmCreateBill(pending.id, lineGroupId, userId);
+      return [billCard(game, bill, shares, "💰 คิดเงินแล้ว")];
+    }
+    case "cancel_bill": {
+      await confirmCancelBill(pending.id, lineGroupId, userId);
+      return [billCancelled()];
+    }
   }
 }
 
@@ -171,6 +205,48 @@ async function handleEditFieldChoice(
   return [questionFor(field, pending.id, game.court_count, lastPromptPay)];
 }
 
+const BILL_STEPS = ["court_fee", "shuttle_count", "shuttle_price", "extra"] as const;
+type BillStep = (typeof BILL_STEPS)[number];
+
+function isBillStep(step: string): step is BillStep {
+  return (BILL_STEPS as readonly string[]).includes(step);
+}
+
+/**
+ * ปุ่มของ wizard คิดเงิน
+ * ค่าที่ต้องพิมพ์ตอบ (ค่าน้ำ, รายการอื่น) แค่จำไว้ว่ากำลังรออะไร แล้วถามเป็นข้อความ
+ */
+async function handleBillStep(
+  pending: PendingActionRow,
+  step: BillStep,
+  value: string,
+): Promise<LineMessage[]> {
+  if (step === "extra") {
+    if (value === "done") return advanceBillWizard(pending, { extras_done: true });
+
+    const awaiting = value === "water" ? "bill_water" : "bill_other";
+    const saved = await updatePendingPayload(pending.id, { awaiting });
+    if (!saved) throw new AppError("PENDING_EXPIRED");
+
+    return [value === "water" ? askAmount("ค่าน้ำ") : askOtherItem()];
+  }
+
+  if (step === "court_fee") {
+    return advanceBillWizard(pending, { court_fee: value === "skip" ? null : Number(value) });
+  }
+
+  if (step === "shuttle_count") {
+    const count = Number(value);
+    // ไม่ใช้ลูกแบดก็ไม่ต้องถามราคา
+    return advanceBillWizard(pending, {
+      shuttle_count: count,
+      ...(count === 0 ? { shuttle_price: null } : {}),
+    });
+  }
+
+  return advanceBillWizard(pending, { shuttle_price: Number(value) });
+}
+
 /**
  * จัดการปุ่มที่ผู้ใช้กด
  * ทุกปุ่มที่อ้าง pending action ต้องเป็นของคนที่สั่งเท่านั้น และใช้ได้เฉพาะที่ยังไม่หมดอายุ (spec §21)
@@ -184,6 +260,10 @@ export async function handlePostback(
   },
 ): Promise<LineMessage[]> {
   const userId = input.user.id;
+
+  if (parsed.action === "bill_paid") return doMarkPayment(input.lineGroupId, input.user, true);
+  if (parsed.action === "bill_unpaid") return doMarkPayment(input.lineGroupId, input.user, false);
+  if (parsed.action === "bill_status") return doUnpaidList(input.lineGroupId);
 
   if (parsed.action === "join") return doJoin(input.lineGroupId, input.user);
   if (parsed.action === "leave") return doLeave(input.lineGroupId, input.user);
@@ -205,6 +285,11 @@ export async function handlePostback(
   if (parsed.step === "field") {
     if (pending.action_type !== "edit_game") throw new AppError("INTERNAL_ERROR");
     return handleEditFieldChoice(pending, input.lineGroupId, parsed.value);
+  }
+
+  if (isBillStep(parsed.step)) {
+    if (pending.action_type !== "create_bill") throw new AppError("INTERNAL_ERROR");
+    return handleBillStep(pending, parsed.step, parsed.value);
   }
 
   if (parsed.step === "promptpay") {

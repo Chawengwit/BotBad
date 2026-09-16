@@ -9,7 +9,15 @@ export type PendingActionType =
   | "cancel_bill";
 
 /** payload เก็บลง jsonb จึงรับได้เฉพาะค่าที่แปลงเป็น JSON ได้ */
-export type PendingPayload = Record<string, string | number | boolean | null>;
+export type PendingPayloadValue =
+  | string
+  | number
+  | boolean
+  | null
+  | PendingPayloadValue[]
+  | { [key: string]: PendingPayloadValue };
+
+export type PendingPayload = Record<string, PendingPayloadValue>;
 
 export type PendingActionRow = {
   id: string;

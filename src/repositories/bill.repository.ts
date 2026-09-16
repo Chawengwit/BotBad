@@ -130,6 +130,27 @@ export async function markSharePaid(
   return rows.length > 0;
 }
 
+/**
+ * ราคาลูกแบดที่กลุ่มนี้ใช้ล่าสุด เอาไว้เสนอเป็นตัวเลือกแรกตอนถาม
+ * ราคาลูกของแต่ละก๊วนแทบไม่เปลี่ยน การพิมพ์ใหม่ทุกสัปดาห์จึงเป็นงานเปล่า
+ */
+export async function findLastShuttlePrice(
+  lineGroupId: string,
+  sql: Queryable = getSql(),
+): Promise<number | null> {
+  const rows = await sql<{ unit_price_satang: number }[]>`
+    SELECT (item ->> 'unit_price_satang')::int AS unit_price_satang
+    FROM bills b
+    JOIN games g ON g.id = b.game_id
+    CROSS JOIN LATERAL jsonb_array_elements(b.items) AS item
+    WHERE g.line_group_id = ${lineGroupId}
+      AND item ->> 'label' = 'ลูกแบด'
+    ORDER BY b.id DESC
+    LIMIT 1
+  `;
+  return rows[0]?.unit_price_satang ?? null;
+}
+
 export async function cancelBill(billId: string, sql: Queryable = getSql()): Promise<void> {
   await sql`
     UPDATE bills

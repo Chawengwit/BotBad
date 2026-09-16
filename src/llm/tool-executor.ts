@@ -20,6 +20,7 @@ import {
   validatePatch,
 } from "@/services/game-admin.service";
 import { gameDraftSchema, missingDraftFields } from "@/services/game.service";
+import { unpaidSharesForGame } from "@/services/bill.service";
 import { joinGame, leaveGame, listPlayers } from "@/services/player.service";
 import { isToolName, toolSchemas, type ToolName } from "./tools";
 
@@ -165,7 +166,7 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
     case "propose_close_game": {
       const { pending, game, joinedCount } = await startCloseGame(lineGroupId, user.id);
       return ok({ status: "awaiting_confirmation" }, [
-        confirmCloseGame(pending.id, game, joinedCount),
+        confirmCloseGame(pending.id, game, joinedCount, await unpaidSharesForGame(game.id)),
       ]);
     }
   }

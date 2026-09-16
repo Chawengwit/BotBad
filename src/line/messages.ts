@@ -1,9 +1,11 @@
 import type { ErrorCode } from "@/errors/app-errors";
-import type { ButtonsMessage, MessageAction, TextMessage } from "@/lib/line";
+import type { ButtonsMessage, LineMessage, MessageAction, TextMessage } from "@/lib/line";
 import { formatDuration, formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
 import type { PendingActionType } from "@/repositories/pending-action.repository";
 import { WAKE_WORD } from "@/router/wake-word";
 import { MAX_PLAYERS, MIN_PLAYERS, type GameDraft } from "@/services/game.service";
+import { summarize, toBaht } from "@/services/bill.service";
+import type { BillItem, BillRow, BillShareRow } from "@/repositories/types";
 import type { EditPatch } from "@/services/game-admin.service";
 import type { GameRow } from "@/repositories/types";
 
@@ -354,15 +356,38 @@ export function confirmCancelGame(
   );
 }
 
+/**
+ * เตือนว่าใครยังไม่จ่าย แต่ไม่ขวางการปิดรอบ
+ * ถ้าห้ามปิด คนที่ไม่จ่ายคนเดียวจะทำให้ทั้งกลุ่มเปิดรอบใหม่ไม่ได้ (PRP §5.7)
+ */
+function unpaidWarning(unpaid: BillShareRow[]): string[] {
+  if (unpaid.length === 0) return [];
+
+  const total = unpaid.reduce((sum, share) => sum + share.amount_satang, 0);
+  return [
+    "",
+    `⚠️ ยังมีคนไม่จ่าย ${unpaid.length} คน`,
+    `${unpaid.map((share) => share.display_name).join(", ")} — รวม ${formatBaht(total)}`,
+    "",
+    'ปิดรอบแล้วยังกด "จ่ายแล้ว" และถาม "ใครยังไม่จ่าย" ได้ตามปกติ',
+  ];
+}
+
 export function confirmCloseGame(
   pendingId: string,
   game: GameRow,
   joinedCount: number,
-): ButtonsMessage {
-  return buttons(
-    "ปิดรอบตี?",
-    ["🏁 ปิดรอบตีนี้?", gameSummary(game), `👥 ${joinedCount}/${game.max_players} คน`].join("\n"),
-    confirmActions(pendingId, "✅ ปิดรอบ", "กลับ"),
+  unpaid: BillShareRow[] = [],
+): LineMessage {
+  const body = ["🏁 ปิดรอบตีนี้?", gameSummary(game), `👥 ${joinedCount}/${game.max_players} คน`];
+  const actions = confirmActions(pendingId, "✅ ปิดรอบ", "กลับ");
+
+  // มีรายชื่อค้างจ่ายเมื่อไหร่ ข้อความจะยาวเกิน 160 ตัวอักษรของ buttons template ได้ง่าย
+  if (unpaid.length === 0) return buttons("ปิดรอบตี?", body.join("\n"), actions);
+
+  return quickReplyText(
+    [...body, ...unpaidWarning(unpaid)].join("\n"),
+    actions.map((action) => ({ label: action.label, data: "data" in action ? action.data : "" })),
   );
 }
 
@@ -370,8 +395,22 @@ export function gameCancelled(): TextMessage {
   return text('🚫 ยกเลิกรอบตีเรียบร้อย\n\nเปิดรอบใหม่ได้ด้วย "บอทจ๋า เปิดตี"');
 }
 
-export function gameClosed(): TextMessage {
-  return text('🏁 ปิดรอบเรียบร้อย ขอบคุณทุกคนที่มาตีนะ 🏸\n\nเปิดรอบใหม่ได้ด้วย "บอทจ๋า เปิดตี"');
+export function gameClosed(unpaid: BillShareRow[] = []): TextMessage {
+  if (unpaid.length === 0) {
+    return text('🏁 ปิดรอบเรียบร้อย ขอบคุณทุกคนที่มาตีนะ 🏸\n\nเปิดรอบใหม่ได้ด้วย "บอทจ๋า เปิดตี"');
+  }
+
+  const total = unpaid.reduce((sum, share) => sum + share.amount_satang, 0);
+  return text(
+    [
+      "🏁 ปิดรอบเรียบร้อย ขอบคุณทุกคนที่มาตีนะ 🏸",
+      "",
+      `⭕ ยังค้างอยู่ ${unpaid.length} คน รวม ${formatBaht(total)}`,
+      unpaid.map((share) => share.display_name).join(", "),
+      "",
+      'ตามเก็บต่อได้ด้วย "บอทจ๋า ใครยังไม่จ่าย"',
+    ].join("\n"),
+  );
 }
 
 export function actionRejected(actionType: PendingActionType): TextMessage {
@@ -380,9 +419,221 @@ export function actionRejected(actionType: PendingActionType): TextMessage {
       return text("ยกเลิกแล้ว ไม่ได้เปิดรอบตีนะ");
     case "edit_game":
       return text("ไม่ได้แก้อะไร รอบตียังเหมือนเดิม");
+    case "create_bill":
+      return text("ยกเลิกแล้ว ยังไม่ได้คิดเงินนะ");
+    case "cancel_bill":
+      return text("ไม่ได้ยกเลิกบิล บิลเดิมยังอยู่");
     default:
       return text("ไม่ได้ทำอะไรต่อ รอบตียังเปิดอยู่เหมือนเดิม");
   }
+}
+
+/** ตัวเลือกที่ขึ้นบ่อยในก๊วนไทย ที่เหลือพิมพ์เอาเอง */
+export const COURT_FEE_CHOICES = [300, 400, 500] as const;
+export const SHUTTLE_PRICE_CHOICES = [20, 25, 30] as const;
+export const SHUTTLE_COUNT_CHOICES = [1, 2, 3, 4] as const;
+
+/** เงินเก็บเป็นสตางค์ แต่คนอ่านเป็นบาททศนิยมสองตำแหน่งเสมอ */
+export function formatBaht(satang: number): string {
+  return toBaht(satang).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+export function askCourtFee(pendingId: string): TextMessage {
+  return quickReplyText(
+    "🏟️ ค่าคอร์ทเท่าไหร่?\n\nกดเลือกหรือพิมพ์จำนวนเงินมาได้เลย",
+    [
+      ...COURT_FEE_CHOICES.map((baht) => ({
+        label: `${baht}`,
+        data: wizardData(pendingId, "court_fee", String(baht)),
+      })),
+      { label: "ไม่มีค่าคอร์ท", data: wizardData(pendingId, "court_fee", "skip") },
+    ],
+  );
+}
+
+export function askShuttleCount(pendingId: string): TextMessage {
+  return quickReplyText("🏸 ใช้ลูกแบดกี่ลูก?", [
+    ...SHUTTLE_COUNT_CHOICES.map((count) => ({
+      label: `${count} ลูก`,
+      data: wizardData(pendingId, "shuttle_count", String(count)),
+    })),
+    { label: "ไม่มี", data: wizardData(pendingId, "shuttle_count", "0") },
+  ]);
+}
+
+export function askShuttlePrice(pendingId: string, lastPriceSatang: number | null): TextMessage {
+  const last = lastPriceSatang === null ? null : toBaht(lastPriceSatang);
+  const choices = [...(last !== null ? [last] : []), ...SHUTTLE_PRICE_CHOICES.filter((baht) => baht !== last)];
+
+  return quickReplyText(
+    "🏸 ลูกละเท่าไหร่?\n\nกดเลือกหรือพิมพ์จำนวนเงินมาได้เลย",
+    choices.map((baht, index) => ({
+      label: index === 0 && last !== null ? `${baht} (ครั้งก่อน)` : `${baht}`,
+      data: wizardData(pendingId, "shuttle_price", String(baht)),
+    })),
+  );
+}
+
+export function askExtraItem(pendingId: string): TextMessage {
+  return quickReplyText("➕ มีค่าอื่นอีกไหม?", [
+    { label: "💧 ค่าน้ำ", data: wizardData(pendingId, "extra", "water") },
+    { label: "➕ อื่น ๆ", data: wizardData(pendingId, "extra", "other") },
+    { label: "✅ ไม่มีแล้ว", data: wizardData(pendingId, "extra", "done") },
+  ]);
+}
+
+export function askAmount(label: string): TextMessage {
+  return text(`💵 ${label}เท่าไหร่?\n\nพิมพ์จำนวนเงินตอบได้เลย`);
+}
+
+export function askOtherItem(): TextMessage {
+  return text('➕ พิมพ์ชื่อรายการกับจำนวนเงินมาในบรรทัดเดียว\n\nเช่น "ค่าเช่าไม้ 100"');
+}
+
+function itemIcon(label: string): string {
+  if (label === "ค่าคอร์ท") return "🏟️";
+  if (label === "ลูกแบด") return "🏸";
+  if (label.includes("น้ำ")) return "💧";
+  return "➕";
+}
+
+function itemLines(items: BillItem[]): string[] {
+  return items.map((item) => {
+    const detail =
+      item.quantity > 1
+        ? `${item.label} ${item.quantity} ลูก × ${formatBaht(item.unit_price_satang)}`
+        : item.label;
+    return `${itemIcon(item.label)} ${detail} — ${formatBaht(item.amount_satang)}`;
+  });
+}
+
+function billLines(game: GameRow, items: BillItem[], totalSatang: number, headCount: number): string[] {
+  return [
+    `💰 คิดเงินรอบ ${formatThaiDate(game.play_date)}`,
+    "",
+    ...itemLines(items),
+    "──────────",
+    `รวม ${formatBaht(totalSatang)}`,
+    `หาร ${headCount} คน → คนละ ${formatBaht(Math.floor(totalSatang / headCount))}`,
+  ];
+}
+
+export function confirmBill(
+  pendingId: string,
+  game: GameRow,
+  items: BillItem[],
+  totalSatang: number,
+  headCount: number,
+): TextMessage {
+  return quickReplyText(
+    [...billLines(game, items, totalSatang, headCount), "", "ส่งบิลเข้ากลุ่มเลยไหม?"].join("\n"),
+    confirmActions(pendingId, "✅ ส่งบิล").map((action) => ({
+      label: action.label,
+      data: "data" in action ? action.data : "",
+    })),
+  );
+}
+
+const BILL_ACTIONS = [
+  { label: "💸 จ่ายแล้ว", data: "action=bill_paid" },
+  { label: "👀 ใครยังไม่จ่าย", data: "action=bill_status" },
+];
+
+/**
+ * การ์ดบิล ใช้ข้อความ + quick reply ไม่ใช่ buttons template
+ * เพราะ buttons template จำกัดข้อความไว้ 160 ตัวอักษร ซึ่งบิลหลายรายการเกินได้ง่าย
+ */
+export function billCard(
+  game: GameRow,
+  bill: BillRow,
+  shares: BillShareRow[],
+  headline?: string,
+): TextMessage {
+  const { unpaid, settled } = summarize(shares);
+
+  return quickReplyText(
+    [
+      ...(headline ? [headline, ""] : []),
+      ...billLines(game, bill.items, bill.total_satang, shares.length),
+      ...(game.promptpay ? ["", `💸 พร้อมเพย์ ${formatPromptPay(game.promptpay)}`] : []),
+      "",
+      settled ? "✅ จ่ายครบทุกคนแล้ว" : `⭕ ยังไม่จ่าย ${unpaid.length} คน`,
+    ].join("\n"),
+    BILL_ACTIONS,
+  );
+}
+
+export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[]): TextMessage {
+  const { paid, unpaid, unpaidTotalSatang, settled } = summarize(shares);
+  const names = (list: BillShareRow[]) => list.map((share) => share.display_name).join(", ");
+
+  return quickReplyText(
+    [
+      `💰 รอบ ${formatThaiDate(game.play_date)} — คนละ ${formatBaht(shares[0]?.amount_satang ?? 0)}`,
+      "",
+      ...(paid.length > 0 ? [`✅ จ่ายแล้ว (${paid.length})`, names(paid), ""] : []),
+      ...(settled
+        ? ["🎉 จ่ายครบทุกคนแล้ว"]
+        : [
+            `⭕ ยังไม่จ่าย (${unpaid.length})`,
+            names(unpaid),
+            "",
+            `ยังไม่ได้รับ ${formatBaht(unpaidTotalSatang)}`,
+            ...(game.promptpay ? [`💸 พร้อมเพย์ ${formatPromptPay(game.promptpay)}`] : []),
+          ]),
+    ].join("\n"),
+    settled ? [] : BILL_ACTIONS.slice(0, 1),
+  );
+}
+
+export function paymentRecorded(
+  displayName: string,
+  amountSatang: number,
+  shares: BillShareRow[],
+): TextMessage {
+  const { unpaid, settled } = summarize(shares);
+
+  return text(
+    [
+      `✅ บันทึกแล้ว ${displayName} จ่าย ${formatBaht(amountSatang)}`,
+      settled ? "🎉 ครบทุกคนแล้ว" : `เหลืออีก ${unpaid.length} คน`,
+    ].join("\n"),
+  );
+}
+
+export function paymentUndone(displayName: string, shares: BillShareRow[]): TextMessage {
+  const { unpaid } = summarize(shares);
+  return text(`↩️ เอา ${displayName} กลับไปเป็นยังไม่จ่ายแล้ว\n\nค้างอยู่ ${unpaid.length} คน`);
+}
+
+export function confirmCancelBill(
+  pendingId: string,
+  game: GameRow,
+  shares: BillShareRow[],
+): TextMessage {
+  const { paid } = summarize(shares);
+
+  return quickReplyText(
+    [
+      `⚠️ ยกเลิกบิลของรอบ ${formatThaiDate(game.play_date)}?`,
+      "",
+      ...(paid.length > 0
+        ? [`มีคนกดว่าจ่ายแล้ว ${paid.length} คน การยกเลิกจะลบบันทึกนั้นทิ้งด้วย`, ""]
+        : []),
+      "ยกเลิกแล้วคิดเงินใหม่ได้เลย",
+    ].join("\n"),
+    confirmActions(pendingId, "🗑️ ยกเลิกบิล").map((action) => ({
+      label: action.label,
+      data: "data" in action ? action.data : "",
+    })),
+  );
+}
+
+export function billCancelled(): TextMessage {
+  return text('🗑️ ยกเลิกบิลแล้ว\n\nคิดใหม่ได้ด้วย "บอทจ๋า คิดเงิน"');
 }
 
 export function gameSummary(game: GameRow): string {
@@ -446,6 +697,16 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
       );
     case "NO_CHANGES":
       return text("ℹ️ ไม่มีอะไรเปลี่ยนแปลง");
+    case "NO_BILL":
+      return text('❌ รอบนี้ยังไม่ได้คิดเงิน\n\nคนที่เปิดรอบพิมพ์ "บอทจ๋า คิดเงิน" ได้เลย');
+    case "BILL_ALREADY_EXISTS":
+      return text('⛔ รอบนี้คิดเงินไปแล้ว\n\nถ้าจะคิดใหม่ต้องพิมพ์ "บอทจ๋า ยกเลิกบิล" ก่อน');
+    case "NOT_IN_BILL":
+      return text("ℹ️ คุณไม่ได้อยู่ในบิลรอบนี้");
+    case "NO_PLAYERS_TO_SPLIT":
+      return text("❌ ยังไม่มีใครลงชื่อ เลยหารไม่ได้");
+    case "AMOUNT_INVALID":
+      return text("❌ จำนวนเงินต้องมากกว่า 0 และไม่เกิน 100,000 บาท");
     case "MISSING_FIELDS":
       return text("ℹ️ ข้อมูลยังไม่ครบ ลองเริ่มใหม่ด้วย “บอทจ๋า เปิดตี”");
     default:

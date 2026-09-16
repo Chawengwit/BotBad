@@ -1,12 +1,23 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeSql, type Sql } from "@/lib/db";
 import { isAppError } from "@/errors/app-errors";
 import { cancelBill, findActiveBill } from "@/repositories/bill.repository";
 import { insertGame, updateGameStatus } from "@/repositories/game.repository";
 import { upsertUser } from "@/repositories/user.repository";
 import type { GameRow, UserRow } from "@/repositories/types";
-import { createBill, getBill, markMyPayment, summarize } from "@/services/bill.service";
+import { updatePendingPayload, type PendingPayload } from "@/repositories/pending-action.repository";
+import {
+  confirmCreateBill,
+  getBill,
+  markMyPayment,
+  startCreateBill,
+  summarize,
+  type BillDraft,
+  type BillView,
+} from "@/services/bill.service";
 import { joinGame, leaveGame } from "@/services/player.service";
+import { handleEvent, type EventContext } from "@/line/handle-event";
+import type { LineMessage } from "@/lib/line";
 import { canRunDbTests, createTestSql, testLineUserId } from "./helpers";
 
 const GROUP_ID = "C-test-bill";
@@ -18,6 +29,59 @@ async function errorCode(run: () => Promise<unknown>): Promise<string> {
     return isAppError(error) ? error.code : `NOT_APP_ERROR: ${String(error)}`;
   }
   return "NO_ERROR";
+}
+
+type Collected = { messages: LineMessage[] };
+
+function contextFor(collected: Collected[], displayName: string): EventContext {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ displayName }), { status: 200 })),
+  );
+  return {
+    accessToken: "test-access-token",
+    reply: async (_replyToken, messages) => {
+      collected.push({ messages });
+    },
+  };
+}
+
+function textEvent(text: string, lineUserId: string) {
+  return {
+    type: "message",
+    replyToken: `rt-${Math.random()}`,
+    source: { type: "group", groupId: GROUP_ID, userId: lineUserId },
+    message: { type: "text", id: "1", text },
+  };
+}
+
+function postbackEvent(data: string, lineUserId: string) {
+  return {
+    type: "postback",
+    replyToken: `rt-${Math.random()}`,
+    source: { type: "group", groupId: GROUP_ID, userId: lineUserId },
+    postback: { data },
+  };
+}
+
+/** หา data ของปุ่ม ไม่ว่าจะเป็นปุ่มใน template หรือ quick reply */
+function actionData(collected: Collected[], label: string): string {
+  for (const message of collected.at(-1)?.messages ?? []) {
+    if (message.type === "template") {
+      const action = message.template.actions.find((item) => item.label === label);
+      if (action && "data" in action) return action.data;
+    } else if (message.quickReply) {
+      const item = message.quickReply.items.find((entry) => entry.action.label === label);
+      if (item && "data" in item.action) return item.action.data;
+    }
+  }
+  throw new Error(`ไม่พบปุ่ม ${label}`);
+}
+
+function messageTexts(messages: LineMessage[]): string {
+  return messages
+    .map((message) => (message.type === "text" ? message.text : message.template.text))
+    .join("\n");
 }
 
 describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี (ฐานข้อมูลจริง, schema bot_test)", () => {
@@ -43,7 +107,10 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await cleanup();
   });
 
-  afterEach(cleanup);
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await cleanup();
+  });
 
   afterAll(async () => {
     await sql.end({ timeout: 5 });
@@ -89,10 +156,17 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     return { owner, players };
   }
 
+  /** เดินทางเดียวกับผู้ใช้จริง: เริ่ม wizard แล้วกดยืนยัน */
+  async function billFor(owner: UserRow, draft: BillDraft): Promise<BillView> {
+    const { pending } = await startCreateBill(GROUP_ID, owner.id);
+    await updatePendingPayload(pending.id, draft as PendingPayload);
+    return confirmCreateBill(pending.id, GROUP_ID, owner.id);
+  }
+
   it("หารเท่ากันทุกคน และยอดรวมของทุกคนเท่ากับยอดบิล", async () => {
     const { owner } = await gameWithPlayers(8);
 
-    const { bill, shares } = await createBill(GROUP_ID, owner.id, {
+    const { bill, shares } = await billFor(owner, {
       court_fee: 600,
       shuttle_count: 4,
       shuttle_price: 25,
@@ -108,7 +182,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   it("หารไม่ลงตัว เศษตกที่คนคิดเงิน", async () => {
     const { owner } = await gameWithPlayers(7);
 
-    const { bill, shares } = await createBill(GROUP_ID, owner.id, { court_fee: 760 });
+    const { bill, shares } = await billFor(owner, { court_fee: 760 });
 
     const ownerShare = shares.find((share) => share.user_id === owner.id);
     expect(ownerShare?.amount_satang).toBe(10858);
@@ -121,7 +195,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   it("คนที่ไม่ได้เปิดรอบ คิดเงินไม่ได้", async () => {
     const { players } = await gameWithPlayers(2);
 
-    expect(await errorCode(() => createBill(GROUP_ID, players[1]!.id, { court_fee: 600 }))).toBe(
+    expect(await errorCode(() => startCreateBill(GROUP_ID, players[1]!.id))).toBe(
       "NOT_GAME_CREATOR",
     );
   });
@@ -130,24 +204,20 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const owner = await newUser("เชวง");
     await openGame(owner.id);
 
-    expect(await errorCode(() => createBill(GROUP_ID, owner.id, { court_fee: 600 }))).toBe(
-      "NO_PLAYERS_TO_SPLIT",
-    );
+    expect(await errorCode(() => startCreateBill(GROUP_ID, owner.id))).toBe("NO_PLAYERS_TO_SPLIT");
   });
 
   it("รอบเดียวมีบิลได้ใบเดียว", async () => {
     const { owner } = await gameWithPlayers(4);
-    await createBill(GROUP_ID, owner.id, { court_fee: 600 });
+    await billFor(owner, { court_fee: 600 });
 
-    expect(await errorCode(() => createBill(GROUP_ID, owner.id, { court_fee: 700 }))).toBe(
-      "BILL_ALREADY_EXISTS",
-    );
+    expect(await errorCode(() => startCreateBill(GROUP_ID, owner.id))).toBe("BILL_ALREADY_EXISTS");
     expect(await sql`SELECT id FROM bills`).toHaveLength(1);
   });
 
   it("บอกว่าจ่ายแล้ว กดซ้ำ แล้วย้อนกลับได้ ยอดคงเหลือถูกเสมอ", async () => {
     const { owner, players } = await gameWithPlayers(4);
-    await createBill(GROUP_ID, owner.id, { court_fee: 400 });
+    await billFor(owner, { court_fee: 400 });
 
     const first = await markMyPayment(GROUP_ID, players[1]!.id, true);
     expect(first.changed).toBe(true);
@@ -166,7 +236,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
   it("จ่ายครบทุกคนถึงจะนับว่าจบ", async () => {
     const { owner, players } = await gameWithPlayers(3);
-    await createBill(GROUP_ID, owner.id, { court_fee: 300 });
+    await billFor(owner, { court_fee: 300 });
 
     for (const player of players.slice(0, 2)) {
       await markMyPayment(GROUP_ID, player.id, true);
@@ -179,7 +249,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
   it("คนที่ไม่ได้อยู่ในบิล กดจ่ายไม่ได้", async () => {
     const { owner } = await gameWithPlayers(2);
-    await createBill(GROUP_ID, owner.id, { court_fee: 200 });
+    await billFor(owner, { court_fee: 200 });
 
     const outsider = await newUser("คนนอก");
     expect(await errorCode(() => markMyPayment(GROUP_ID, outsider.id, true))).toBe("NOT_IN_BILL");
@@ -187,7 +257,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
   it("ถอนชื่อหลังคิดเงินแล้ว ยอดในบิลไม่เปลี่ยน", async () => {
     const { owner, players } = await gameWithPlayers(4);
-    const before = await createBill(GROUP_ID, owner.id, { court_fee: 400 });
+    const before = await billFor(owner, { court_fee: 400 });
 
     await leaveGame(GROUP_ID, players[3]!.id);
 
@@ -199,7 +269,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
   it("ปิดรอบแล้วบิลยังอยู่ ตามเก็บเงินต่อได้", async () => {
     const { owner, players } = await gameWithPlayers(2);
-    await createBill(GROUP_ID, owner.id, { court_fee: 200 });
+    await billFor(owner, { court_fee: 200 });
 
     await updateGameStatus((await getBill(GROUP_ID)).bill.game_id, "completed", sql);
 
@@ -212,19 +282,158 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
   it("ยกเลิกบิลแล้วคิดใหม่ได้", async () => {
     const { owner } = await gameWithPlayers(4);
-    const first = await createBill(GROUP_ID, owner.id, { court_fee: 400 });
+    const first = await billFor(owner, { court_fee: 400 });
 
     await cancelBill(first.bill.id, sql);
     expect(await errorCode(() => getBill(GROUP_ID))).toBe("NO_BILL");
 
-    const second = await createBill(GROUP_ID, owner.id, { court_fee: 800 });
+    const second = await billFor(owner, { court_fee: 800 });
     expect(second.bill.total_satang).toBe(80000);
     expect((await findActiveBill(GROUP_ID, sql))?.id).toBe(second.bill.id);
   });
 
+  it("เดินครบทั้ง wizard จากคำสั่งจริงจนได้การ์ดบิล", async () => {
+    const { owner, players } = await gameWithPlayers(4);
+    const collected: Collected[] = [];
+    const context = contextFor(collected, "เชวง");
+
+    await handleEvent(textEvent("บอทจ๋า คิดเงิน", owner.line_user_id), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("ค่าคอร์ทเท่าไหร่");
+
+    // กดปุ่มค่าคอร์ท แล้วพิมพ์จำนวนลูกกับราคาเอง
+    await handleEvent(postbackEvent(actionData(collected, "400"), owner.line_user_id), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("กี่ลูก");
+
+    await handleEvent(postbackEvent(actionData(collected, "2 ลูก"), owner.line_user_id), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("ลูกละเท่าไหร่");
+
+    // พิมพ์ตอบแบบมีหน่วยปนมา
+    await handleEvent(textEvent("25 บาท", owner.line_user_id), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("มีค่าอื่นอีกไหม");
+
+    await handleEvent(postbackEvent(actionData(collected, "💧 ค่าน้ำ"), owner.line_user_id), context);
+    await handleEvent(textEvent("50", owner.line_user_id), context);
+
+    await handleEvent(postbackEvent(actionData(collected, "➕ อื่น ๆ"), owner.line_user_id), context);
+    await handleEvent(textEvent("ค่าเช่าไม้ 100", owner.line_user_id), context);
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ไม่มีแล้ว"), owner.line_user_id), context);
+    const confirmText = messageTexts(collected.at(-1)!.messages);
+    expect(confirmText).toContain("รวม 600.00");
+    expect(confirmText).toContain("หาร 4 คน → คนละ 150.00");
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ส่งบิล"), owner.line_user_id), context);
+    const cardText = messageTexts(collected.at(-1)!.messages);
+    expect(cardText).toContain("คิดเงินแล้ว");
+    expect(cardText).toContain("พร้อมเพย์ 081-234-5678");
+    expect(cardText).toContain("ยังไม่จ่าย 4 คน");
+
+    // 400 + (2 x 25) + 50 + 100 = 600 บาท
+    const stored = await getBill(GROUP_ID);
+    expect(stored.bill.total_satang).toBe(60000);
+    expect(stored.bill.items.map((item) => item.label)).toEqual([
+      "ค่าคอร์ท",
+      "ลูกแบด",
+      "ค่าน้ำ",
+      "ค่าเช่าไม้",
+    ]);
+
+    // คนอื่นกดจ่ายแล้วจากปุ่มบนการ์ด
+    const otherContext = contextFor(collected, "ผู้เล่น 1");
+    await handleEvent(
+      postbackEvent(actionData(collected, "💸 จ่ายแล้ว"), players[1]!.line_user_id),
+      otherContext,
+    );
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("เหลืออีก 3 คน");
+  });
+
+  it("ค่าคอร์ทข้ามได้ ถ้าเดือนนี้จ่ายเหมาไปแล้ว", async () => {
+    const { owner } = await gameWithPlayers(2);
+    const collected: Collected[] = [];
+    const context = contextFor(collected, "เชวง");
+
+    await handleEvent(textEvent("บอทจ๋า คิดเงิน", owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ไม่มีค่าคอร์ท"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "1 ลูก"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "25"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "✅ ไม่มีแล้ว"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "✅ ส่งบิล"), owner.line_user_id), context);
+
+    const stored = await getBill(GROUP_ID);
+    expect(stored.bill.items.map((item) => item.label)).toEqual(["ลูกแบด"]);
+    expect(stored.bill.total_satang).toBe(2500);
+  });
+
+  it("พิมพ์จำนวนเงินมั่วจะถามใหม่ ไม่เดินหน้าต่อ", async () => {
+    const { owner } = await gameWithPlayers(2);
+    const collected: Collected[] = [];
+    const context = contextFor(collected, "เชวง");
+
+    await handleEvent(textEvent("บอทจ๋า คิดเงิน", owner.line_user_id), context);
+    await handleEvent(textEvent("เท่าไหร่ก็ได้", owner.line_user_id), context);
+
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("พิมพ์เป็นตัวเลข");
+    expect(await sql`SELECT id FROM bills`).toHaveLength(0);
+  });
+
+  it("ยกเลิกบิลผ่านคำสั่งแล้วคิดใหม่ได้", async () => {
+    const { owner } = await gameWithPlayers(2);
+    await billFor(owner, { court_fee: 200 });
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected, "เชวง");
+
+    await handleEvent(textEvent("บอทจ๋า ยกเลิกบิล", owner.line_user_id), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลของรอบ");
+
+    await handleEvent(postbackEvent(actionData(collected, "🗑️ ยกเลิกบิล"), owner.line_user_id), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลแล้ว");
+
+    expect(await errorCode(() => getBill(GROUP_ID))).toBe("NO_BILL");
+    expect(await errorCode(() => startCreateBill(GROUP_ID, owner.id))).toBe("NO_ERROR");
+  });
+
+  it("ปิดรอบได้แม้ยังจ่ายไม่ครบ แต่ต้องเตือนว่าเหลือใคร", async () => {
+    const { owner, players } = await gameWithPlayers(3);
+    await billFor(owner, { court_fee: 300 });
+    await markMyPayment(GROUP_ID, players[1]!.id, true);
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected, "เชวง");
+
+    await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.line_user_id), context);
+    const confirmText = messageTexts(collected.at(-1)!.messages);
+    expect(confirmText).toContain("ยังมีคนไม่จ่าย 2 คน");
+    expect(confirmText).toContain("รวม 200.00");
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ปิดรอบ"), owner.line_user_id), context);
+    const closedText = messageTexts(collected.at(-1)!.messages);
+    expect(closedText).toContain("ปิดรอบเรียบร้อย");
+    expect(closedText).toContain("ยังค้างอยู่ 2 คน");
+
+    // ปิดรอบแล้วยังตามเก็บต่อได้
+    const paid = await markMyPayment(GROUP_ID, players[2]!.id, true);
+    expect(paid.changed).toBe(true);
+  });
+
+  it("ก๊วนที่ไม่ได้คิดเงิน ปิดรอบได้เหมือนเดิม ไม่มีอะไรมาเตือน", async () => {
+    const { owner } = await gameWithPlayers(2);
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected, "เชวง");
+
+    await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.line_user_id), context);
+    expect(messageTexts(collected.at(-1)!.messages)).not.toContain("ยังมีคนไม่จ่าย");
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ปิดรอบ"), owner.line_user_id), context);
+    const closedText = messageTexts(collected.at(-1)!.messages);
+    expect(closedText).toContain("ปิดรอบเรียบร้อย");
+    expect(closedText).not.toContain("ยังค้างอยู่");
+  });
+
   it("รายการที่บันทึกไว้อ่านกลับมาได้ครบ", async () => {
     const { owner } = await gameWithPlayers(2);
-    const { bill } = await createBill(GROUP_ID, owner.id, {
+    const { bill } = await billFor(owner, {
       court_fee: 600,
       shuttle_count: 3,
       shuttle_price: 25,

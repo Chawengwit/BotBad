@@ -1,13 +1,15 @@
 import { AppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
-import { askAgain, askLocation, askPromptPay } from "@/line/messages";
+import { askAgain, askLocation, askOtherItem, askPromptPay } from "@/line/messages";
 import {
   findAwaitingPendingAction,
   type PendingActionRow,
+  type PendingPayload,
 } from "@/repositories/pending-action.repository";
 import { findLatestPromptPay } from "@/repositories/game.repository";
+import { parseAmount, parseOtherItem } from "@/services/bill.service";
 import { courtNameSchema, locationUrlSchema, promptPaySchema } from "@/services/game.service";
-import { advanceCreateWizard, advanceEditWizard } from "./wizard";
+import { advanceBillWizard, advanceCreateWizard, advanceEditWizard } from "./wizard";
 
 const URL_IN_TEXT = /https?:\/\/[^\s]+/;
 
@@ -77,6 +79,44 @@ async function applyPromptPay(pending: PendingActionRow, text: string): Promise<
   return advanceCreateWizard(pending, { promptpay: parsed.data });
 }
 
+const BILL_AMOUNT_FIELDS: Record<string, string> = {
+  bill_court_fee: "court_fee",
+  bill_shuttle_price: "shuttle_price",
+};
+
+async function applyBillAmount(
+  pending: PendingActionRow,
+  awaiting: string,
+  text: string,
+): Promise<LineMessage[]> {
+  const amount = parseAmount(text);
+  if (amount === null) {
+    return [askAgain("💵 พิมพ์เป็นตัวเลขจำนวนเงินนะ เช่น 600 (ไม่เกิน 100,000 บาท)")];
+  }
+
+  if (awaiting === "bill_water") {
+    const items = [...((pending.payload.other_items as unknown[]) ?? [])];
+    return advanceBillWizard(pending, {
+      other_items: [...items, { label: "ค่าน้ำ", amount }] as PendingPayload["other_items"],
+    });
+  }
+
+  return advanceBillWizard(pending, { [BILL_AMOUNT_FIELDS[awaiting] ?? ""]: amount });
+}
+
+async function applyBillOtherItem(
+  pending: PendingActionRow,
+  text: string,
+): Promise<LineMessage[]> {
+  const parsed = parseOtherItem(text);
+  if (!parsed) return [askAgain('➕ พิมพ์ชื่อกับจำนวนเงินในบรรทัดเดียวนะ เช่น "ค่าเช่าไม้ 100"'), askOtherItem()];
+
+  const items = [...((pending.payload.other_items as unknown[]) ?? [])];
+  return advanceBillWizard(pending, {
+    other_items: [...items, parsed] as PendingPayload["other_items"],
+  });
+}
+
 /**
  * ข้อความที่ไม่มี wake word จะถูกอ่านก็ต่อเมื่อบอทกำลังรอคำตอบจากคนคนนั้นอยู่จริง (spec §6)
  * คืน null แปลว่าไม่เกี่ยวกับบอท ให้เงียบไว้
@@ -100,6 +140,16 @@ export async function handleTextAnswer(input: {
   if (awaiting === "promptpay") {
     if (input.text === undefined) return null;
     return applyPromptPay(pending, input.text);
+  }
+
+  if (awaiting === "bill_court_fee" || awaiting === "bill_shuttle_price" || awaiting === "bill_water") {
+    if (input.text === undefined) return null;
+    return applyBillAmount(pending, awaiting, input.text);
+  }
+
+  if (awaiting === "bill_other") {
+    if (input.text === undefined) return null;
+    return applyBillOtherItem(pending, input.text);
   }
 
   if (awaiting === "location") {

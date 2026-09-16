@@ -2,18 +2,26 @@ import { AppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
 import {
   askCourtCount,
+  askCourtFee,
   askCourtName,
   askDate,
   askDuration,
+  askExtraItem,
   askLocation,
   askMaxPlayers,
   askPromptPay,
+  askShuttleCount,
+  askShuttlePrice,
   askTime,
+  confirmBill,
   confirmCreateGame,
   confirmEditGame,
 } from "@/line/messages";
+import { findLastShuttlePrice } from "@/repositories/bill.repository";
+import { buildBillItems, draftFromPayload, totalOf } from "@/services/bill.service";
 import {
   countJoinedPlayers,
+  findGameById,
   findLatestPromptPay,
   findOpenGame,
 } from "@/repositories/game.repository";
@@ -86,6 +94,49 @@ export async function advanceCreateWizard(
 
   await save(pending.id, { ...patch, awaiting: null });
   return [confirmCreateGame(pending.id, gameDraftSchema.parse(payload))];
+}
+
+/**
+ * เดินหน้า wizard คิดเงิน
+ * ลำดับคำถาม: ค่าคอร์ท → กี่ลูก → ลูกละเท่าไหร่ → ค่าอื่น ๆ → การ์ดยืนยัน
+ * ช่องที่ข้ามไปเก็บเป็น null เพื่อแยกจาก "ยังไม่ได้ถาม" (undefined)
+ */
+export async function advanceBillWizard(
+  pending: PendingActionRow,
+  patch: PendingPayload,
+): Promise<LineMessage[]> {
+  const payload = { ...pending.payload, ...patch };
+
+  if (payload.court_fee === undefined) {
+    // ตอบด้วยปุ่มหรือพิมพ์ตัวเลขมาก็ได้ จึงต้องจำไว้ว่ากำลังรอคำตอบอะไร
+    await save(pending.id, { ...patch, awaiting: "bill_court_fee" });
+    return [askCourtFee(pending.id)];
+  }
+
+  if (payload.shuttle_count === undefined) {
+    await save(pending.id, { ...patch, awaiting: null });
+    return [askShuttleCount(pending.id)];
+  }
+
+  if (Number(payload.shuttle_count) > 0 && payload.shuttle_price === undefined) {
+    await save(pending.id, { ...patch, awaiting: "bill_shuttle_price" });
+    return [askShuttlePrice(pending.id, await findLastShuttlePrice(pending.line_group_id))];
+  }
+
+  if (payload.extras_done !== true) {
+    await save(pending.id, { ...patch, awaiting: null });
+    return [askExtraItem(pending.id)];
+  }
+
+  await save(pending.id, { ...patch, awaiting: null });
+
+  const game = await findGameById(String(pending.game_id));
+  if (!game) throw new AppError("NO_OPEN_GAME");
+
+  const items = buildBillItems(draftFromPayload(payload));
+  return [
+    confirmBill(pending.id, game, items, totalOf(items), await countJoinedPlayers(game.id)),
+  ];
 }
 
 /** แก้ไขทีละช่อง เลือกค่าเสร็จก็ไปการ์ดยืนยันเลย */
