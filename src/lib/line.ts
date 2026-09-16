@@ -1,6 +1,8 @@
-import { truncate } from "./log";
+import { formatErrorForLog, truncate } from "./log";
 
 const LINE_API = "https://api.line.me/v2/bot";
+/** LINE รับได้สูงสุด 5 ข้อความต่อการ reply หนึ่งครั้ง เกินนี้จะโดนปฏิเสธทั้งชุด */
+export const MAX_REPLY_MESSAGES = 5;
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_ERROR_DETAIL_LENGTH = 300;
 
@@ -75,12 +77,17 @@ export async function replyMessages(
   messages: LineMessage[],
   accessToken: string,
 ): Promise<void> {
+  if (messages.length > MAX_REPLY_MESSAGES) {
+    console.warn(`[line] trimmed reply from ${messages.length} to ${MAX_REPLY_MESSAGES} messages`);
+  }
+  const trimmed = messages.slice(0, MAX_REPLY_MESSAGES);
+
   await callLineApi(
     "/message/reply",
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ replyToken, messages }),
+      body: JSON.stringify({ replyToken, messages: trimmed }),
     },
     accessToken,
   );
@@ -105,8 +112,10 @@ export async function getGroupMemberDisplayName(
     return typeof profile.displayName === "string" && profile.displayName.length > 0
       ? profile.displayName
       : null;
-  } catch {
-    // ดึงชื่อไม่ได้ไม่ควรทำให้ทั้งคำสั่งล้ม ให้ผู้เรียกใช้ชื่อสำรองแทน
+  } catch (error) {
+    // ดึงชื่อไม่ได้ไม่ควรทำให้ทั้งคำสั่งล้ม แต่ต้องรู้ เพราะถ้า token หมดอายุ
+    // สมาชิกทุกคนจะกลายเป็นชื่อสำรองเหมือนกันหมดโดยไม่มีสัญญาณอะไรเลย
+    console.error("[line] cannot read display name:", formatErrorForLog(error, [accessToken]));
     return null;
   }
 }

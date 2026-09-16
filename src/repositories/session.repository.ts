@@ -31,6 +31,9 @@ export async function saveSessionMessages(
 ): Promise<void> {
   const trimmed = messages.slice(-SESSION_MAX_MESSAGES);
 
+  // เก็บกวาดของหมดอายุไปด้วยเลย จะได้ไม่ต้องมี cron แยก
+  await sql`DELETE FROM conversation_sessions WHERE expires_at < now()`;
+
   await sql`
     INSERT INTO conversation_sessions (line_group_id, line_user_id, messages, expires_at)
     VALUES (

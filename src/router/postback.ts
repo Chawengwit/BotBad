@@ -10,6 +10,7 @@ import {
   updatePendingPayload,
   type PendingActionRow,
 } from "@/repositories/pending-action.repository";
+import { clearSession } from "@/repositories/session.repository";
 import type { UserRow } from "@/repositories/types";
 import { applyCancelGame, applyCloseGame, applyEditGame } from "@/services/game-admin.service";
 import {
@@ -102,6 +103,19 @@ const EDIT_FIELD_QUESTIONS = {
 async function handleConfirm(
   pending: PendingActionRow,
   lineGroupId: string,
+  user: UserRow,
+): Promise<LineMessage[]> {
+  const userId = user.id;
+  const messages = await runConfirm(pending, lineGroupId, userId);
+
+  // จบเรื่องแล้ว ไม่ต้องให้ LLM จำบทสนทนาเดิมไปเสนอซ้ำ (LLM Design §10)
+  await clearSession(lineGroupId, user.line_user_id).catch(() => {});
+  return messages;
+}
+
+async function runConfirm(
+  pending: PendingActionRow,
+  lineGroupId: string,
   userId: string,
 ): Promise<LineMessage[]> {
   switch (pending.action_type) {
@@ -174,7 +188,7 @@ export async function handlePostback(
   }
 
   if (parsed.action === "confirm") {
-    return handleConfirm(pending, input.lineGroupId, userId);
+    return handleConfirm(pending, input.lineGroupId, input.user);
   }
 
   if (parsed.step === "field") {
@@ -189,7 +203,7 @@ export async function handlePostback(
       await expirePendingAction(pending.id, input.lineGroupId);
       return [actionRejected(pending.action_type)];
     }
-    return advanceCreateWizard(pending.id, { ...pending.payload, location_asked: true });
+    return advanceCreateWizard(pending, { location_asked: true });
   }
 
   const { field, value } = draftValue(parsed.step, parsed.value, input.params, todayInBangkok());
@@ -198,5 +212,5 @@ export async function handlePostback(
     return advanceEditWizard(pending.id, input.lineGroupId, field, value);
   }
 
-  return advanceCreateWizard(pending.id, { ...pending.payload, [field]: value });
+  return advanceCreateWizard(pending, { [field]: value });
 }

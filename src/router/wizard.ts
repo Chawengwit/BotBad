@@ -14,9 +14,10 @@ import {
 import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
 import {
   updatePendingPayload,
+  type PendingActionRow,
   type PendingPayload,
 } from "@/repositories/pending-action.repository";
-import { editPatchSchema, validatePatch } from "@/services/game-admin.service";
+import { editPatchSchema, validatePatch, withDerivedMaxPlayers } from "@/services/game-admin.service";
 import { gameDraftSchema, missingDraftFields, type DraftField } from "@/services/game.service";
 
 /** คำถามของแต่ละช่อง ใช้ทั้งตอนเปิดรอบและตอนแก้ไข */
@@ -45,36 +46,31 @@ export function questionFor(
 
 /**
  * เดินหน้า wizard เปิดรอบไปอีกขั้น
- * ช่องที่ต้องพิมพ์ตอบจะบันทึก awaiting ไว้ใน payload เพื่อให้รู้ว่าข้อความถัดไปคือคำตอบของอะไร
+ * เขียนลงฐานข้อมูลเฉพาะช่องที่เปลี่ยน (merge) ส่วนการตัดสินใจว่าจะถามอะไรต่อคำนวณจากค่าที่รวมกันแล้ว
+ * ช่องที่ต้องพิมพ์ตอบจะบันทึก awaiting ไว้ เพื่อให้รู้ว่าข้อความถัดไปคือคำตอบของอะไร
  */
 export async function advanceCreateWizard(
-  pendingId: string,
-  payload: PendingPayload,
+  pending: PendingActionRow,
+  patch: PendingPayload,
 ): Promise<LineMessage[]> {
+  const payload = { ...pending.payload, ...patch };
   const courtCount = Number(payload.court_count ?? 1);
   const next = missingDraftFields(payload)[0];
 
   if (next) {
     const awaiting = next === "court_name" ? "court_name" : null;
-    const saved = await updatePendingPayload(pendingId, { ...payload, awaiting });
-    if (!saved) throw new AppError("PENDING_EXPIRED");
-    return [questionFor(next, pendingId, courtCount)];
+    await save(pending.id, { ...patch, awaiting });
+    return [questionFor(next, pending.id, courtCount)];
   }
 
   // ข้อมูลครบแล้ว ถามเรื่องแผนที่อีกหนึ่งครั้ง (ข้ามได้)
   if (payload.location_url === undefined && payload.location_asked !== true) {
-    const saved = await updatePendingPayload(pendingId, {
-      ...payload,
-      awaiting: "location",
-      location_asked: true,
-    });
-    if (!saved) throw new AppError("PENDING_EXPIRED");
-    return [questionFor("location_url", pendingId, courtCount)];
+    await save(pending.id, { ...patch, awaiting: "location", location_asked: true });
+    return [questionFor("location_url", pending.id, courtCount)];
   }
 
-  const saved = await updatePendingPayload(pendingId, { ...payload, awaiting: null });
-  if (!saved) throw new AppError("PENDING_EXPIRED");
-  return [confirmCreateGame(pendingId, gameDraftSchema.parse(payload))];
+  await save(pending.id, { ...patch, awaiting: null });
+  return [confirmCreateGame(pending.id, gameDraftSchema.parse(payload))];
 }
 
 /** แก้ไขทีละช่อง เลือกค่าเสร็จก็ไปการ์ดยืนยันเลย */
@@ -84,16 +80,20 @@ export async function advanceEditWizard(
   field: string,
   value: number | string,
 ): Promise<LineMessage[]> {
-  const patch = editPatchSchema.parse({ [field]: value });
-
   const game = await findOpenGame(lineGroupId);
   if (!game) throw new AppError("NO_OPEN_GAME");
+
+  // เปลี่ยนจำนวนคอร์ทอาจกระทบจำนวนคนที่รับ ต้องคิดให้ครบก่อนเอาไปแสดงบนการ์ด
+  const patch = withDerivedMaxPlayers(game, editPatchSchema.parse({ [field]: value }));
 
   // ตรวจตั้งแต่ตอนนี้ จะได้ไม่ให้กดยืนยันไปแล้วค่อยบอกว่าไม่ได้
   validatePatch(game, patch, await countJoinedPlayers(game.id));
 
-  const saved = await updatePendingPayload(pendingId, { [field]: value, awaiting: null });
-  if (!saved) throw new AppError("PENDING_EXPIRED");
-
+  await save(pendingId, { ...(patch as PendingPayload), awaiting: null });
   return [confirmEditGame(pendingId, game, patch)];
+}
+
+async function save(pendingId: string, patch: PendingPayload): Promise<void> {
+  const saved = await updatePendingPayload(pendingId, patch);
+  if (!saved) throw new AppError("PENDING_EXPIRED");
 }

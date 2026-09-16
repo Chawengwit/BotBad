@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_REPLY_MESSAGES } from "@/lib/line";
 import { buildSystemPrompt } from "@/llm/system-prompt";
 import { isToolName, toolDeclarations, toolSchemas } from "@/llm/tools";
 import type { GameRow } from "@/repositories/types";
@@ -77,6 +78,12 @@ describe("tool argument schemas", () => {
     ["ฟิลด์แปลกปลอม", { created_by: "U1" }],
   ])("ปฏิเสธ %s", (_label, args) => {
     expect(toolSchemas.propose_create_game.safeParse(args).success).toBe(false);
+  });
+});
+
+describe("reply limit", () => {
+  it("LINE รับได้ 5 ข้อความต่อครั้ง ตัวเลขนี้ต้องไม่เปลี่ยนโดยไม่ตั้งใจ", () => {
+    expect(MAX_REPLY_MESSAGES).toBe(5);
   });
 });
 

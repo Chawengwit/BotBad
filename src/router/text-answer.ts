@@ -39,7 +39,7 @@ async function applyCourtName(
     return advanceEditWizard(pending.id, pending.line_group_id, "court_name", parsed.data);
   }
 
-  return advanceCreateWizard(pending.id, { ...pending.payload, court_name: parsed.data });
+  return advanceCreateWizard(pending, { court_name: parsed.data });
 }
 
 async function applyLocation(
@@ -57,7 +57,7 @@ async function applyLocation(
     return advanceEditWizard(pending.id, pending.line_group_id, "location_url", url);
   }
 
-  return advanceCreateWizard(pending.id, { ...pending.payload, location_url: url });
+  return advanceCreateWizard(pending, { location_url: url });
 }
 
 /**

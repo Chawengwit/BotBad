@@ -8,6 +8,7 @@
  * เขียนเป็น .mjs เพื่อให้รันด้วย node ตรง ๆ ได้โดยไม่ต้องมีตัวแปลง TypeScript
  */
 import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import postgres from "postgres";
 
@@ -77,7 +78,9 @@ try {
     `;
 
     for (const name of pending) {
-      const statements = await readFile(new URL(name, `file://${MIGRATIONS_DIR}`), "utf8");
+      // ใช้ path.join ไม่ใช่ URL เพราะ MIGRATIONS_DIR ถูก decode แล้ว
+      // ถ้า path มีช่องว่างหรืออักษรไทยจะประกอบ URL ผิด
+      const statements = await readFile(join(MIGRATIONS_DIR, name), "utf8");
       // ทั้งไฟล์ + การบันทึกว่ารันแล้ว อยู่ใน transaction เดียวกัน ถ้าพังกลางทางจะไม่ค้างครึ่ง ๆ
       await sql.begin(async (tx) => {
         await tx.unsafe(statements);

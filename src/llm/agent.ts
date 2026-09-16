@@ -1,7 +1,7 @@
 import type { Content } from "@google/genai";
 import type { GeminiClient } from "@/lib/gemini";
 import { MAX_TOOL_LOOPS } from "@/lib/gemini";
-import type { LineMessage } from "@/lib/line";
+import { MAX_REPLY_MESSAGES, type LineMessage } from "@/lib/line";
 import { formatErrorForLog } from "@/lib/log";
 import { fallbackMenu, text } from "@/line/messages";
 import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
@@ -121,19 +121,36 @@ export async function runAgent(input: AgentInput): Promise<LineMessage[]> {
     // ไม่มีทั้งข้อความและปุ่ม แปลว่าไปไม่สุด เช่น วน tool ครบแล้วยังไม่ได้คำตอบ
     if (!replyText && attachments.length === 0) return [fallbackMenu()];
 
-    await saveSessionMessages(input.lineGroupId, input.lineUserId, [
-      ...history,
-      { role: "user", text: userText },
-      ...(replyText ? [{ role: "model" as const, text: replyText }] : []),
-    ]);
-
-    return [...(replyText ? [text(replyText)] : []), ...attachments];
+    await rememberTurn(input, history, userText, replyText);
+    return buildReply(replyText, attachments);
   } catch (error) {
     console.error("[llm] failed:", formatErrorForLog(error));
-    // ถ้ามีการ์ดยืนยันเกิดขึ้นแล้ว ต้องส่งให้ผู้ใช้ ไม่งั้นจะมีรายการค้างที่ไม่มีปุ่มกด
+
+    // งานบางอย่างทำไปแล้วก่อนพัง ต้องส่งการ์ดให้ผู้ใช้เห็น ไม่งั้นจะมีรายการค้างที่ไม่มีปุ่มกด
     if (attachments.length > 0) {
-      return [text("เรียบร้อย กดปุ่มยืนยันด้านล่างได้เลย 👇"), ...attachments];
+      await rememberTurn(input, [], userText, "").catch(() => {});
+      return buildReply("นี่คือผลล่าสุดครับ 👇", attachments);
     }
     return [fallbackMenu()];
   }
+}
+
+/** ข้อความจาก LLM + การ์ด รวมแล้วต้องไม่เกินที่ LINE ส่งได้ต่อครั้ง เก็บการ์ดใบล่าสุดไว้ก่อน */
+function buildReply(replyText: string, attachments: LineMessage[]): LineMessage[] {
+  const head = replyText ? [text(replyText)] : [];
+  const room = MAX_REPLY_MESSAGES - head.length;
+  return [...head, ...attachments.slice(-room)];
+}
+
+async function rememberTurn(
+  input: AgentInput,
+  history: SessionMessage[],
+  userText: string,
+  replyText: string,
+): Promise<void> {
+  await saveSessionMessages(input.lineGroupId, input.lineUserId, [
+    ...history,
+    { role: "user", text: userText },
+    ...(replyText ? [{ role: "model" as const, text: replyText }] : []),
+  ]);
 }

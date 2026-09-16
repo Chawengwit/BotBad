@@ -348,14 +348,14 @@ describe("POST /api/line/webhook", () => {
     });
 
     it("caps how many events one request may fan out to", async () => {
-      const events = Array.from({ length: 60 }, (_, index) =>
+      const events = Array.from({ length: 25 }, (_, index) =>
         textEvent("บอทจ๋า", oneToOne, `reply-token-${index}`),
       );
 
       const res = await POST(makeRequest({ destination: "U1", events }));
 
       expect(res.status).toBe(200);
-      expect(fetchMock).toHaveBeenCalledTimes(50);
+      expect(replyCalls()).toHaveLength(10);
       expect(logged()).toContain("over the limit");
     });
 
@@ -370,13 +370,13 @@ describe("POST /api/line/webhook", () => {
         return new Response("{}", { status: 200 });
       });
 
-      const events = Array.from({ length: 20 }, (_, index) =>
+      const events = Array.from({ length: 10 }, (_, index) =>
         textEvent("บอทจ๋า", oneToOne, `reply-token-${index}`),
       );
 
       await POST(makeRequest({ destination: "U1", events }));
 
-      expect(fetchMock).toHaveBeenCalledTimes(20);
+      expect(replyCalls()).toHaveLength(10);
       expect(peak).toBeLessThanOrEqual(5);
     });
   });

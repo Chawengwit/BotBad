@@ -1,5 +1,5 @@
 import type { ErrorCode } from "@/errors/app-errors";
-import type { ButtonsMessage, LineMessage, MessageAction, TextMessage } from "@/lib/line";
+import type { ButtonsMessage, MessageAction, TextMessage } from "@/lib/line";
 import { formatDuration, formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
 import type { PendingActionType } from "@/repositories/pending-action.repository";
 import { WAKE_WORD } from "@/router/wake-word";
@@ -418,24 +418,5 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
       return text("ℹ️ ข้อมูลยังไม่ครบ ลองเริ่มใหม่ด้วย “บอทจ๋า เปิดตี”");
     default:
       return text("😵 ระบบขัดข้อง ลองใหม่อีกครั้งนะ");
-  }
-}
-
-export function wizardPrompt(
-  pendingId: string,
-  payload: Record<string, unknown>,
-  missing: readonly string[],
-): LineMessage {
-  switch (missing[0]) {
-    case "court_count":
-      return askCourtCount(pendingId);
-    case "play_date":
-      return askDate(pendingId);
-    case "start_time":
-      return askTime(pendingId);
-    case "duration_minutes":
-      return askDuration(pendingId);
-    default:
-      return confirmCreateGame(pendingId, payload as unknown as GameDraft);
   }
 }

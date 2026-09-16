@@ -225,6 +225,39 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
     expect(messageTexts(messages)).toContain("ลองเลือกคำสั่งด้านล่าง");
   });
 
+  it("ตอบไม่เกิน 5 ข้อความ แม้ tool จะสร้างการ์ดมาเยอะ", async () => {
+    const owner = await newUser();
+    await openGame(owner.user.id);
+
+    // list_players สร้าง 2 ข้อความต่อครั้ง วนครบ 3 รอบก็เกินที่ LINE รับได้แล้ว
+    const messages = await run(owner, "ใครตีบ้าง", fakeClient([call("list_players")]));
+
+    expect(messages.length).toBeLessThanOrEqual(5);
+  });
+
+  it("พังหลังทำงานไปแล้ว ต้องส่งการ์ดให้เห็น แต่ไม่หลอกว่ามีปุ่มยืนยัน", async () => {
+    const owner = await newUser();
+    await openGame(owner.user.id);
+    const player = await newUser("Bank");
+
+    // รอบแรกลงชื่อสำเร็จ รอบสองพัง (เช่น timeout)
+    const client = fakeClient([call("join_game"), new Error("timeout")]);
+    const messages = await run(player, "ผมไปด้วย", client);
+
+    const body = messageTexts(messages);
+    expect(body).toContain("Bank ลงชื่อแล้ว");
+    expect(body).not.toContain("กดปุ่มยืนยัน");
+
+    // งานทำไปแล้วจริง และบทสนทนาต้องถูกบันทึกไว้ ไม่ใช่หายไปเฉย ๆ
+    const rows = await sql<{ count: number }[]>`
+      SELECT COUNT(*)::int AS count FROM game_players WHERE user_id = ${player.user.id} AND status = 'joined'
+    `;
+    expect(rows[0]?.count).toBe(1);
+    expect(await loadSessionMessages(GROUP_ID, player.lineUserId, sql)).toEqual([
+      { role: "user", text: "ผมไปด้วย" },
+    ]);
+  });
+
   it("Gemini ล่มก็ยังตอบเมนูปุ่ม", async () => {
     const user = await newUser();
 

@@ -17,8 +17,9 @@ LINE Bot สำหรับจัดรอบตีแบดใน LINE Group
 - [x] 7 เปิดรอบตี (`บอทจ๋า เปิดตี` → เลือกคอร์ท/วัน/เวลา/ชั่วโมง → ยืนยัน)
 - [x] 8–10 ลงชื่อ / ถอนชื่อ / ดูรายชื่อ
 - [x] 11–13 แก้ไข / ยกเลิก / ปิดรอบ (เฉพาะผู้สร้างรอบ)
-- [x] 16–19 Gemini + Tools + Session + Fallback (ต้องตั้ง `GEMINI_API_KEY` ถึงจะทำงาน)
-- [ ] 14 LINE Flex Message (ตอนนี้ใช้ buttons template) ← **เหลืออยู่**
+- [x] 16–19 Gemini + Tools + Session + Fallback (ทดสอบกับ Gemini จริงแล้ว 2026-09-16)
+- [x] Health check + cron กัน Supabase pause
+- [ ] 14 LINE Flex Message (ตอนนี้ใช้ buttons template) ← **เหลืออยู่ชิ้นเดียวของ MVP**
 
 พฤติกรรมตอนนี้:
 
@@ -41,6 +42,15 @@ LINE Bot สำหรับจัดรอบตีแบดใน LINE Group
 ชื่อคอร์ทและลิงก์แผนที่ตอบด้วยการพิมพ์ธรรมดา ไม่ต้องขึ้นต้นด้วย `บอทจ๋า` (บอทรับเฉพาะข้อความของคนที่สั่งไว้ ระหว่างที่ยังรอคำตอบอยู่) ส่วนแผนที่จะแชร์ตำแหน่งจาก LINE ก็ได้ หรือกดข้าม
 
 ทดสอบว่า webhook ต่อติดจริงได้ 2 ทาง คือเชิญบอทเข้ากลุ่มใหม่ หรือทักบอทในแชท 1:1 ด้วย `บอทจ๋า`
+
+## Health check
+
+```text
+GET /api/health → {"ok":true}   (503 ถ้าต่อฐานข้อมูลไม่ได้)
+```
+
+Vercel Cron เรียกวันละครั้งตาม `vercel.json` เพื่อไม่ให้โปรเจค Supabase แบบ Free ถูก pause
+ถ้าตั้ง `CRON_SECRET` ไว้ endpoint นี้จะไม่เปิดสาธารณะ
 
 ## HTTP ที่ webhook ตอบ
 
@@ -84,6 +94,7 @@ npm run dev                  # http://localhost:3000/api/line/webhook
 | `DB_SCHEMA` | ไม่บังคับ ค่าเริ่มต้น `public` ใช้ `bot_test` ตอนรันเทส |
 | `GEMINI_API_KEY` | ✅ ภาษาธรรมชาติ (ไม่ใส่ก็ใช้บอทได้ แต่จะตอบเป็นเมนูปุ่มแทน) |
 | `GEMINI_MODEL` | ไม่บังคับ ค่าเริ่มต้น `gemini-3.1-flash-lite` |
+| `CRON_SECRET` | ไม่บังคับ ถ้าตั้งไว้ `GET /api/health` จะรับเฉพาะคำขอที่มี `Authorization: Bearer <ค่า>` |
 
 ห้าม commit ค่าจริง ใส่ใน `.env.local` (ถูก gitignore ไว้แล้ว) และใน Vercel เท่านั้น
 

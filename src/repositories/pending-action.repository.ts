@@ -17,6 +17,21 @@ export type PendingActionRow = {
 /** ปุ่มยืนยันมีอายุ 10 นาที (spec §20) */
 export const PENDING_TTL = "10 minutes";
 
+/**
+ * ลบรายการที่หมดอายุหรือใช้ไปแล้วของกลุ่มนี้
+ * ทำตอนสร้างรายการใหม่ จะได้ไม่ต้องมี cron แยก (spec §27 ไม่อยากเพิ่ม infrastructure)
+ */
+export async function deleteFinishedPendingActions(
+  lineGroupId: string,
+  sql: Queryable = getSql(),
+): Promise<void> {
+  await sql`
+    DELETE FROM pending_actions
+    WHERE line_group_id = ${lineGroupId}
+      AND (expires_at < now() OR used_at IS NOT NULL)
+  `;
+}
+
 export async function createPendingAction(
   input: {
     lineGroupId: string;
@@ -27,6 +42,8 @@ export async function createPendingAction(
   },
   sql: Queryable = getSql(),
 ): Promise<PendingActionRow> {
+  await deleteFinishedPendingActions(input.lineGroupId, sql);
+
   const rows = await sql<PendingActionRow[]>`
     INSERT INTO pending_actions (line_group_id, requested_by, game_id, action_type, payload, expires_at)
     VALUES (
@@ -86,15 +103,18 @@ export async function findAwaitingPendingAction(
   return rows[0] ?? null;
 }
 
-/** อัปเดตข้อมูลที่ผู้ใช้เลือกมาทีละขั้นใน wizard */
+/**
+ * อัปเดตเฉพาะช่องที่เปลี่ยน โดย merge เข้ากับของเดิมในฐานข้อมูล
+ * ถ้าเขียนทับทั้งก้อน การกดปุ่มสองครั้งเร็ว ๆ จะทำให้ค่าที่กดก่อนหายไป
+ */
 export async function updatePendingPayload(
   id: string,
-  payload: PendingPayload,
+  patch: PendingPayload,
   sql: Queryable = getSql(),
 ): Promise<PendingActionRow | null> {
   const rows = await sql<PendingActionRow[]>`
     UPDATE pending_actions
-    SET payload = ${sql.json(payload)}, updated_at = now()
+    SET payload = payload || ${sql.json(patch)}::jsonb, updated_at = now()
     WHERE id = ${id} AND used_at IS NULL AND expires_at > now()
     RETURNING id, line_group_id, requested_by, game_id, action_type, payload
   `;

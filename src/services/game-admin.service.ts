@@ -85,24 +85,23 @@ export function startCloseGame(lineGroupId: string, userId: string) {
 export function validatePatch(game: GameRow, patch: EditPatch, joinedCount: number): void {
   if (Object.keys(patch).length === 0) throw new AppError("NO_CHANGES");
 
-  // ลดจำนวนคนที่รับได้ต่ำกว่าคนที่ลงชื่อไว้แล้วไม่ได้ (spec §15)
-  if (patch.max_players !== undefined && joinedCount > patch.max_players) {
-    throw new AppError("MAX_PLAYERS_TOO_SMALL", {
-      current_players: joinedCount,
-      new_max_players: patch.max_players,
-    });
-  }
+  // ที่นั่งหลังแก้ต้องไม่น้อยกว่าคนที่ลงชื่อไว้แล้ว (spec §15)
+  const nextMaxPlayers = patch.max_players ?? game.max_players;
+  if (joinedCount > nextMaxPlayers) {
+    // ถ้าที่นั่งลดเพราะเปลี่ยนจำนวนคอร์ท ให้บอกเป็นภาษาคอร์ทตามที่ spec เขียนไว้
+    const fromCourtChange =
+      patch.court_count !== undefined && patch.max_players === patch.court_count * 8;
 
-  // เปลี่ยนจำนวนคอร์ทไม่ได้ไปลดจำนวนคนอัตโนมัติแล้ว แต่ยังเตือนถ้าคอร์ทน้อยเกินกว่าคนที่ลงไว้มาก
-  if (patch.court_count !== undefined) {
-    const suggestedMax = patch.court_count * 8;
-    if (joinedCount > suggestedMax) {
-      throw new AppError("COURT_TOO_SMALL", {
-        current_players: joinedCount,
-        new_court_count: patch.court_count,
-        new_max_players: suggestedMax,
-      });
-    }
+    throw fromCourtChange
+      ? new AppError("COURT_TOO_SMALL", {
+          current_players: joinedCount,
+          new_court_count: patch.court_count,
+          new_max_players: nextMaxPlayers,
+        })
+      : new AppError("MAX_PLAYERS_TOO_SMALL", {
+          current_players: joinedCount,
+          new_max_players: nextMaxPlayers,
+        });
   }
 
   const playDate = patch.play_date ?? game.play_date;
@@ -110,9 +109,25 @@ export function validatePatch(game: GameRow, patch: EditPatch, joinedCount: numb
   if (isInThePast(playDate, startTime)) throw new AppError("DATE_IN_PAST");
 }
 
+/**
+ * เติม max_players ให้อัตโนมัติเมื่อเปลี่ยนจำนวนคอร์ท
+ * แต่ถ้าเจ้าของเคยตั้งจำนวนคนเองไว้ (ไม่เท่ากับค่าปกติของคอร์ทเดิม) ให้เคารพค่านั้น
+ */
+export function withDerivedMaxPlayers(game: GameRow, patch: EditPatch): EditPatch {
+  if (patch.max_players !== undefined || patch.court_count === undefined) return patch;
+
+  const usesDefault = game.max_players === game.court_count * 8;
+  return usesDefault ? { ...patch, max_players: patch.court_count * 8 } : patch;
+}
+
 function ensureOwner(pending: PendingActionRow, game: GameRow | null, userId: string): GameRow {
   if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
   if (!game) throw new AppError("NO_OPEN_GAME");
+
+  // การ์ดใบนี้ออกไว้กับรอบไหน ต้องทำกับรอบนั้นเท่านั้น
+  // ไม่งั้นการ์ดเก่าที่ค้างอยู่จะไปปิดหรือยกเลิกรอบใหม่ที่ผู้ใช้ไม่เคยเห็นการ์ด
+  if (pending.game_id && pending.game_id !== game.id) throw new AppError("PENDING_EXPIRED");
+
   if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
   return game;
 }
@@ -133,22 +148,20 @@ export async function applyEditGame(
     const parsed = editPatchSchema.safeParse(pending.payload);
     if (!parsed.success) throw new AppError("NO_CHANGES");
 
+    const patch = withDerivedMaxPlayers(game, parsed.data);
     const joinedCount = await countJoinedPlayers(game.id, tx);
-    validatePatch(game, parsed.data, joinedCount);
+    validatePatch(game, patch, joinedCount);
 
     const updated = await updateGame(
       game.id,
       {
-        courtCount: parsed.data.court_count,
-        // เปลี่ยนจำนวนคอร์ทแล้วยังไม่ได้ตั้งจำนวนคนใหม่ ให้ใช้ค่าปกติของคอร์ทนั้น
-        maxPlayers:
-          parsed.data.max_players ??
-          (parsed.data.court_count !== undefined ? parsed.data.court_count * 8 : undefined),
-        playDate: parsed.data.play_date,
-        startTime: parsed.data.start_time,
-        durationMinutes: parsed.data.duration_minutes,
-        courtName: parsed.data.court_name,
-        locationUrl: parsed.data.location_url,
+        courtCount: patch.court_count,
+        maxPlayers: patch.max_players,
+        playDate: patch.play_date,
+        startTime: patch.start_time,
+        durationMinutes: patch.duration_minutes,
+        courtName: patch.court_name,
+        locationUrl: patch.location_url,
       },
       tx,
     );

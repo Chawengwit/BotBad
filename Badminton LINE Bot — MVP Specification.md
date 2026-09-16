@@ -1628,9 +1628,13 @@ Domain        → ไม่จำเป็น
 - Docker
 - Kubernetes
 - Vector DB
-- Cron job
 - Separate backend server
 - Separate frontend
+
+ข้อยกเว้นเดียว: **Vercel Cron วันละครั้ง** เรียก `GET /api/health` เพื่อไม่ให้โปรเจค Supabase แบบ Free
+ถูก pause จากการไม่มีการใช้งาน (Hobby รันได้วันละครั้ง ไม่มีค่าใช้จ่าย) และใช้เป็นตัวเช็กสุขภาพระบบไปด้วย
+
+ของที่หมดอายุ (`pending_actions`, `conversation_sessions`) ลบทิ้งตอนเขียนรายการใหม่ ไม่ต้องมี job แยก
 
 ---
 
@@ -1638,29 +1642,31 @@ Domain        → ไม่จำเป็น
 
 ## Must Have
 
-- [ ] LINE Webhook (message, postback, join)
-- [ ] Wake Word `บอทจ๋า`
-- [ ] Hybrid Router (Postback / Rule-based / LLM)
-- [ ] Create Game (Wizard + LLM)
-- [ ] Court count
-- [ ] Date
-- [ ] Time
-- [ ] Duration
-- [ ] Automatic max players
-- [ ] One open game per group
-- [ ] Join
-- [ ] Leave
-- [ ] List Players
-- [ ] Edit Game
-- [ ] Cancel Game
-- [ ] Close Game
-- [ ] Pending actions + Confirmation buttons
-- [ ] Authorization
-- [ ] PostgreSQL (Raw SQL)
-- [ ] Gemini Function Calling + System Prompt + Rules
-- [ ] Conversation sessions
-- [ ] LLM Fallback
-- [ ] LINE Flex / Buttons / Quick Reply
+- [x] LINE Webhook (message, postback, join)
+- [x] Wake Word `บอทจ๋า`
+- [x] Hybrid Router (Postback / Rule-based / LLM)
+- [x] Create Game (Wizard + LLM)
+- [x] Court count
+- [x] Max players (ค่าตั้งต้นจากคอร์ท ปรับเองได้)
+- [x] Date
+- [x] Time
+- [x] Duration
+- [x] Court name + map link
+- [x] One open game per group
+- [x] Join
+- [x] Leave
+- [x] List Players
+- [x] Edit Game
+- [x] Cancel Game
+- [x] Close Game
+- [x] Pending actions + Confirmation buttons
+- [x] Authorization
+- [x] PostgreSQL (Raw SQL)
+- [x] Gemini Function Calling + System Prompt + Rules
+- [x] Conversation sessions
+- [x] LLM Fallback
+- [x] Buttons / Quick Reply
+- [ ] LINE Flex Message (ยังใช้ buttons template อยู่)
 
 ## Not in MVP
 

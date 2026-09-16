@@ -5,6 +5,7 @@ import type { LineMessage } from "@/lib/line";
 import { insertGame } from "@/repositories/game.repository";
 import { upsertUser } from "@/repositories/user.repository";
 import type { GameRow, UserRow } from "@/repositories/types";
+import { loadSessionMessages, saveSessionMessages } from "@/repositories/session.repository";
 import { joinGame } from "@/services/player.service";
 import { canRunDbTests, createTestSql, testLineUserId } from "./helpers";
 
@@ -70,6 +71,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
 
   async function cleanup(): Promise<void> {
     await sql`DELETE FROM pending_actions WHERE line_group_id = ${GROUP_ID}`;
+    await sql`DELETE FROM conversation_sessions WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM game_players WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
     await sql`DELETE FROM games WHERE line_group_id = ${GROUP_ID}`;
     if (lineUserIds.length > 0) {
@@ -307,6 +309,83 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     expect(messageTexts(collected.at(-1)!.messages)).toContain("รอบตียังเปิดอยู่เหมือนเดิม");
     const rows = await sql`SELECT status FROM games WHERE line_group_id = ${GROUP_ID}`;
     expect(rows[0]).toMatchObject({ status: "open" });
+  });
+
+  it("การ์ดยืนยันเก่าต้องไม่ไปปิดรอบใหม่ที่เพิ่งเปิด", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+
+    // ขอปิดรอบสองครั้ง ได้การ์ดสองใบของรอบเดียวกัน
+    const first: Collected[] = [];
+    await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.lineUserId), contextFor(first));
+    const staleConfirm = actionData(first, "✅ ปิดรอบ");
+
+    const second: Collected[] = [];
+    await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.lineUserId), contextFor(second));
+    await handleEvent(postbackEvent(actionData(second, "✅ ปิดรอบ"), owner.lineUserId), contextFor(second));
+
+    // เปิดรอบใหม่ แล้วเผลอกดการ์ดใบเก่าที่ยังค้างอยู่
+    const newGame = await openGame(owner.user.id, 1);
+    const stale: Collected[] = [];
+    await handleEvent(postbackEvent(staleConfirm, owner.lineUserId), contextFor(stale));
+
+    expect(messageTexts(stale[0]!.messages)).toContain("หมดอายุ");
+    const rows = await sql<{ id: string; status: string }[]>`
+      SELECT id, status FROM games WHERE id = ${newGame.id}
+    `;
+    expect(rows[0]).toMatchObject({ status: "open" });
+  });
+
+  it("เปลี่ยนจำนวนคอร์ทต้องไม่ทับจำนวนคนที่ตั้งเองไว้", async () => {
+    const owner = await newUser("เชวง");
+    const game = await openGame(owner.user.id, 2);
+    await sql`UPDATE games SET max_players = 30 WHERE id = ${game.id}`;
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+
+    await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "🏟️ จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "3 คอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+
+    const rows = await sql`SELECT court_count, max_players FROM games WHERE line_group_id = ${GROUP_ID}`;
+    expect(rows[0]).toMatchObject({ court_count: 3, max_players: 30 });
+  });
+
+  it("ถ้าใช้ค่าปกติอยู่ เปลี่ยนคอร์ทแล้วจำนวนคนขยับตาม และการ์ดบอกให้เห็น", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id, 2); // 16 คน = ค่าปกติ
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+
+    await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "🏟️ จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "3 คอร์ท"), owner.lineUserId), context);
+
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("รับ 16 → 24 คน");
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    const rows = await sql`SELECT court_count, max_players FROM games WHERE line_group_id = ${GROUP_ID}`;
+    expect(rows[0]).toMatchObject({ court_count: 3, max_players: 24 });
+  });
+
+  it("กดยืนยันสำเร็จแล้วต้องล้างบทสนทนาที่คุยค้างไว้", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+
+    const collected: Collected[] = [];
+    const context = contextFor(collected);
+    await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.lineUserId), context);
+
+    // จำลองว่าระหว่างนั้นมีบทสนทนากับ LLM ค้างอยู่ (คำสั่งตรงตัวล้าง session ไปตั้งแต่บรรทัดบน)
+    await saveSessionMessages(GROUP_ID, owner.lineUserId, [{ role: "user", text: "ปิดรอบให้หน่อย" }], sql);
+    expect(await loadSessionMessages(GROUP_ID, owner.lineUserId, sql)).toHaveLength(1);
+
+    await handleEvent(postbackEvent(actionData(collected, "✅ ปิดรอบ"), owner.lineUserId), context);
+
+    expect(await loadSessionMessages(GROUP_ID, owner.lineUserId, sql)).toEqual([]);
   });
 
   it("ไม่มีรอบเปิดอยู่ จะแก้ไขหรือปิดรอบไม่ได้", async () => {

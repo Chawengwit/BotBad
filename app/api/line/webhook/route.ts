@@ -11,8 +11,9 @@ export const runtime = "nodejs";
 
 const OK_RESPONSE = { ok: true } as const;
 
-// LINE ส่งมาทีละไม่กี่ event การจำกัดไว้กัน body ที่ยัด event มาเป็นพันจนยิง reply ท่วม
-const MAX_EVENTS_PER_REQUEST = 50;
+// LINE ส่งมาทีละไม่กี่ event ตั้งเพดานต่ำไว้เพื่อไม่ให้ handler ใช้เวลานานจน LINE ถือว่า timeout
+// แล้วส่งซ้ำมาด้วย replyToken ที่ใช้ไปแล้ว (แต่ละ event อาจรอ Gemini ได้ถึง 8 วินาที)
+const MAX_EVENTS_PER_REQUEST = 10;
 const MAX_CONCURRENT_REPLIES = 5;
 
 function describeIssues(error: { issues: { path: PropertyKey[]; message: string }[] }): string {
