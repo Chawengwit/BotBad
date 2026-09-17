@@ -16,7 +16,7 @@ import { handlePostback, parsePostbackData, type PostbackData } from "@/router/p
 import {
   handleRuleCommand,
   isRuleCommand,
-  opensWizard,
+  keepsConversationOpen,
   stripWakeWord,
 } from "@/router/rule-commands";
 import { handleTextAnswer } from "@/router/text-answer";
@@ -148,7 +148,7 @@ async function resolveMessages(
         const messages = await handleRuleCommand({ command, lineGroupId: groupId, user });
 
         // คำสั่งที่ตอบมาเป็นคำถามหรือการ์ดยืนยัน = ยังคุยกันไม่จบ ฟังต่อได้เลย
-        const keepListening = gemini !== null && opensWizard(command);
+        const keepListening = gemini !== null && keepsConversationOpen(command);
         await setListeningWindow(groupId, userId, keepListening).catch(() => {});
         return messages;
       }, context.accessToken);

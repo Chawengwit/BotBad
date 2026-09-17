@@ -2,7 +2,9 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { closeSql, type Sql } from "@/lib/db";
 import { handleEvent, type EventContext } from "@/line/handle-event";
 import type { LineMessage } from "@/lib/line";
+import { DEFAULT_START_TIME } from "@/line/messages";
 import { canRunDbTests, createTestSql, testLineUserId } from "./helpers";
+import { buttonData, messageTexts } from "../helpers";
 
 const GROUP_ID = "C-test-create-game";
 const ACCESS_TOKEN = "test-access-token";
@@ -45,24 +47,11 @@ function postbackEvent(data: string, lineUserId: string, params: Record<string, 
   };
 }
 
-/** หา data ของปุ่ม ไม่ว่าจะเป็นปุ่มใน template หรือ quick reply */
+/** หา data ของปุ่มชื่อนี้ ไม่เจอถือว่าเทสผิดพลาด ไม่ใช่ปล่อยผ่าน */
 function actionData(messages: LineMessage[], label: string): string {
-  for (const message of messages) {
-    if (message.type === "template") {
-      const action = message.template.actions.find((item) => item.label === label);
-      if (action && "data" in action) return action.data;
-    } else if (message.quickReply) {
-      const item = message.quickReply.items.find((entry) => entry.action.label === label);
-      if (item && "data" in item.action) return item.action.data;
-    }
-  }
-  throw new Error(`ไม่พบปุ่ม ${label}`);
-}
-
-function messageTexts(messages: LineMessage[]): string {
-  return messages
-    .map((message) => (message.type === "text" ? message.text : message.template.text))
-    .join("\n");
+  const data = buttonData(messages, label);
+  if (data === undefined) throw new Error(`ไม่พบปุ่ม ${label}`);
+  return data;
 }
 
 describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้อมูลจริง, schema bot_test)", () => {
@@ -105,23 +94,19 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     return id;
   }
 
-  /** เดินจนถึงคำถามชื่อคอร์ท */
-  async function runUntilCourtName(
-    userId: string,
-    collected: Collected[],
-    options: { players?: string } = {},
-  ): Promise<void> {
+  /**
+   * เดินจนถึงคำถามชื่อคอร์ท: คอร์ท → เมื่อไหร่ → กี่ชั่วโมง (spec §9.1)
+   * ทุกเทสเริ่มจากกลุ่มที่ไม่มีรอบเก่า บอทจึงถามชื่อคอร์ท ไม่ใช่เสนอ "ที่เดิม"
+   */
+  async function runUntilCourtName(userId: string, collected: Collected[]): Promise<void> {
     const context = makeContext(collected);
+    const press = (label: string) =>
+      handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, label), userId), context);
 
     await handleEvent(textEvent("บอทจ๋า เปิดตี", userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "2 คอร์ท"), userId), context);
-    await handleEvent(
-      postbackEvent(actionData(collected.at(-1)!.messages, options.players ?? "16 คน (ปกติ)"), userId),
-      context,
-    );
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "พรุ่งนี้"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "19:00"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "2 ชั่วโมง"), userId), context);
+    await press("2 คอร์ท");
+    await press(`พรุ่งนี้ ${DEFAULT_START_TIME}`);
+    await press("2 ชั่วโมง");
   }
 
   it("ถามครบทุกขั้นแล้วเปิดรอบได้ พร้อมชื่อคอร์ทและแผนที่", async () => {
@@ -132,11 +117,9 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await runUntilCourtName(userId, collected);
 
     expect(messageTexts(collected[0]!.messages)).toContain("กี่คอร์ท");
-    expect(messageTexts(collected[1]!.messages)).toContain("รับกี่คน");
-    expect(messageTexts(collected[2]!.messages)).toContain("วันไหน");
-    expect(messageTexts(collected[3]!.messages)).toContain("กี่โมง");
-    expect(messageTexts(collected[4]!.messages)).toContain("เล่นกี่ชั่วโมง");
-    expect(messageTexts(collected[5]!.messages)).toContain("คอร์ทไหน");
+    expect(messageTexts(collected[1]!.messages)).toContain("ตีเมื่อไหร่");
+    expect(messageTexts(collected[2]!.messages)).toContain("เล่นกี่ชั่วโมง");
+    expect(messageTexts(collected[3]!.messages)).toContain("คอร์ทไหน");
 
     // ตอบชื่อคอร์ทด้วยข้อความธรรมดา ไม่ต้องมี wake word
     await handleEvent(textEvent("ABC Badminton", userId), context);
@@ -169,23 +152,27 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     });
   });
 
-  it("ตั้งจำนวนคนต่างจากค่าปกติได้", async () => {
+  // wizard ไม่ถามจำนวนคนแล้ว คิดจากคอร์ทให้เลย ใครอยากเปลี่ยนสั่ง "แก้ไข" ทีหลัง (spec §9.1)
+  it("จำนวนคนมาจากจำนวนคอร์ทเองโดยไม่ต้องถาม", async () => {
     const userId = newUser();
     const collected: Collected[] = [];
     const context = makeContext(collected);
 
-    await runUntilCourtName(userId, collected, { players: "20 คน" });
+    await runUntilCourtName(userId, collected);
+    expect(messageTexts(collected.map((entry) => entry.messages).flat())).not.toContain("รับกี่คน");
+
     await handleEvent(textEvent("คอร์ทลุงหมี", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
 
     const games = await sql`
-      SELECT max_players, court_name, location_url, promptpay
+      SELECT court_count, max_players, court_name, location_url, promptpay
       FROM games WHERE line_group_id = ${GROUP_ID}
     `;
     expect(games[0]).toMatchObject({
-      max_players: 20,
+      court_count: 2,
+      max_players: 16,
       court_name: "คอร์ทลุงหมี",
       location_url: null,
       promptpay: null,
@@ -321,13 +308,10 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
 
     await handleEvent(textEvent("บอทจ๋า เปิดตี", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "1 คอร์ท"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "8 คน (ปกติ)"), userId), context);
 
-    const pickerData = actionData(collected.at(-1)!.messages, "เลือกวัน");
-    await handleEvent(postbackEvent(pickerData, userId, { date: "2030-01-15" }), context);
-
-    const timePicker = actionData(collected.at(-1)!.messages, "กำหนดเวลาเอง");
-    await handleEvent(postbackEvent(timePicker, userId, { time: "20:30" }), context);
+    // ปฏิทินเลือกได้ทั้งวันและเวลาในครั้งเดียว
+    const pickerData = actionData(collected.at(-1)!.messages, "เลือกวันและเวลา");
+    await handleEvent(postbackEvent(pickerData, userId, { datetime: "2030-01-15T20:30" }), context);
 
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "1 ชั่วโมง"), userId), context);
     await handleEvent(textEvent("คอร์ทกลางคืน", userId), context);
@@ -346,11 +330,9 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
 
     await handleEvent(textEvent("บอทจ๋า เปิดตี", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "1 คอร์ท"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "8 คน (ปกติ)"), userId), context);
 
-    const pickerData = actionData(collected.at(-1)!.messages, "เลือกวัน");
-    await handleEvent(postbackEvent(pickerData, userId, { date: "2020-01-01" }), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "19:00"), userId), context);
+    const pickerData = actionData(collected.at(-1)!.messages, "เลือกวันและเวลา");
+    await handleEvent(postbackEvent(pickerData, userId, { datetime: "2020-01-01T19:00" }), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "1 ชั่วโมง"), userId), context);
     await handleEvent(textEvent("คอร์ทย้อนอดีต", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);

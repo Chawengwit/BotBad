@@ -85,6 +85,33 @@ export async function findLatestPromptPay(
   return rows[0]?.promptpay ?? null;
 }
 
+export type LastVenue = {
+  court_name: string;
+  location_url: string | null;
+  start_time: string;
+};
+
+/**
+ * สนามและเวลาของรอบล่าสุดของกลุ่ม ใช้เสนอ "ที่เดิม เวลาเดิม" ตอนเปิดรอบใหม่
+ * ก๊วนส่วนใหญ่ตีที่เดิมเวลาเดิมทุกสัปดาห์ จะได้ไม่ต้องพิมพ์ซ้ำทุกครั้ง
+ * ดูทุกสถานะ เพราะรอบที่เพิ่งปิดไปคือรอบที่ใกล้เคียงที่สุดกับรอบถัดไป
+ */
+export async function findLatestVenue(
+  lineGroupId: string,
+  sql: Queryable = getSql(),
+): Promise<LastVenue | null> {
+  const rows = await sql<LastVenue[]>`
+    SELECT court_name,
+           location_url,
+           to_char(start_time, 'HH24:MI') AS start_time
+    FROM games
+    WHERE line_group_id = ${lineGroupId} AND court_name IS NOT NULL
+    ORDER BY id DESC
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
 export async function insertGame(game: NewGame, sql: Queryable = getSql()): Promise<GameRow> {
   const rows = await sql<GameRow[]>`
     INSERT INTO games (

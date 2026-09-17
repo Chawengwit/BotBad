@@ -10,9 +10,11 @@ import {
   askLocation,
   askMaxPlayers,
   askPromptPay,
+  askSameVenue,
   askShuttleCount,
   askShuttlePrice,
   askTime,
+  askWhen,
   confirmBill,
   confirmCreateGame,
   confirmEditGame,
@@ -23,6 +25,7 @@ import {
   countJoinedPlayers,
   findGameById,
   findLatestPromptPay,
+  findLatestVenue,
   findOpenGame,
 } from "@/repositories/game.repository";
 import {
@@ -31,11 +34,16 @@ import {
   type PendingPayload,
 } from "@/repositories/pending-action.repository";
 import { editPatchSchema, validatePatch, withDerivedMaxPlayers } from "@/services/game-admin.service";
-import { gameDraftSchema, missingDraftFields, type DraftField } from "@/services/game.service";
+import {
+  defaultMaxPlayers,
+  gameDraftSchema,
+  missingDraftFields,
+  type DraftField,
+} from "@/services/game.service";
 
-/** คำถามของแต่ละช่อง ใช้ทั้งตอนเปิดรอบและตอนแก้ไข */
+/** คำถามของแต่ละช่อง ใช้ตอนแก้ไขรอบ ซึ่งแก้ทีละช่อง */
 export function questionFor(
-  field: DraftField | "location_url" | "promptpay",
+  field: DraftField | "max_players" | "location_url" | "promptpay",
   pendingId: string,
   courtCount: number,
   lastPromptPay: string | null = null,
@@ -64,36 +72,81 @@ export function questionFor(
  * เดินหน้า wizard เปิดรอบไปอีกขั้น
  * เขียนลงฐานข้อมูลเฉพาะช่องที่เปลี่ยน (merge) ส่วนการตัดสินใจว่าจะถามอะไรต่อคำนวณจากค่าที่รวมกันแล้ว
  * ช่องที่ต้องพิมพ์ตอบจะบันทึก awaiting ไว้ เพื่อให้รู้ว่าข้อความถัดไปคือคำตอบของอะไร
+ *
+ * ลำดับคำถาม: กี่คอร์ท → เมื่อไหร่ → กี่ชั่วโมง → ที่เดิมไหม → ยืนยัน
+ * ก๊วนที่ยังไม่เคยเปิดรอบจะถูกถามชื่อคอร์ท แผนที่ และพร้อมเพย์ทีละข้อแทนขั้น "ที่เดิมไหม"
  */
 export async function advanceCreateWizard(
   pending: PendingActionRow,
   patch: PendingPayload,
 ): Promise<LineMessage[]> {
-  const payload = { ...pending.payload, ...patch };
-  const courtCount = Number(payload.court_count ?? 1);
+  // จำนวนคนคิดจากคอร์ทให้เลย ไม่ต้องถาม (spec §9.1)
+  const withDefaults: PendingPayload =
+    patch.court_count !== undefined && pending.payload.max_players === undefined
+      ? { ...patch, max_players: defaultMaxPlayers(Number(patch.court_count)) }
+      : patch;
+
+  const payload = { ...pending.payload, ...withDefaults };
   const next = missingDraftFields(payload)[0];
 
-  if (next) {
-    const awaiting = next === "court_name" ? "court_name" : null;
-    await save(pending.id, { ...patch, awaiting });
-    return [questionFor(next, pending.id, courtCount)];
+  if (next && next !== "court_name") {
+    await save(pending.id, { ...withDefaults, awaiting: null });
+    return [await createQuestion(next, pending)];
+  }
+
+  // ยังไม่รู้ว่าไปตีที่ไหน ถ้ากลุ่มเคยเปิดรอบมาก่อน เสนอที่เดิมให้กดทีเดียวจบ
+  if (next === "court_name") {
+    const venue = payload.venue_asked === true ? null : await findLatestVenue(pending.line_group_id);
+
+    if (venue) {
+      await save(pending.id, { ...withDefaults, awaiting: null, venue_asked: true });
+      return [
+        askSameVenue(
+          pending.id,
+          venue.court_name,
+          venue.location_url !== null,
+          await findLatestPromptPay(pending.line_group_id),
+        ),
+      ];
+    }
+
+    await save(pending.id, { ...withDefaults, awaiting: "court_name", venue_asked: true });
+    return [askCourtName()];
   }
 
   // ข้อมูลครบแล้ว ถามเรื่องแผนที่อีกหนึ่งครั้ง (ข้ามได้)
   if (payload.location_url === undefined && payload.location_asked !== true) {
-    await save(pending.id, { ...patch, awaiting: "location", location_asked: true });
-    return [questionFor("location_url", pending.id, courtCount)];
+    await save(pending.id, { ...withDefaults, awaiting: "location", location_asked: true });
+    return [askLocation(pending.id)];
   }
 
   // เลขพร้อมเพย์ก็ข้ามได้เหมือนกัน ถามครั้งเดียวจบ ไม่วนถามซ้ำ
   if (payload.promptpay === undefined && payload.promptpay_asked !== true) {
     const lastUsed = await findLatestPromptPay(pending.line_group_id);
-    await save(pending.id, { ...patch, awaiting: "promptpay", promptpay_asked: true });
-    return [questionFor("promptpay", pending.id, courtCount, lastUsed)];
+    await save(pending.id, { ...withDefaults, awaiting: "promptpay", promptpay_asked: true });
+    return [askPromptPay(pending.id, lastUsed)];
   }
 
-  await save(pending.id, { ...patch, awaiting: null });
+  await save(pending.id, { ...withDefaults, awaiting: null });
   return [confirmCreateGame(pending.id, gameDraftSchema.parse(payload))];
+}
+
+/** คำถามของ wizard เปิดรอบ วันกับเวลาถามพร้อมกันในขั้นเดียว */
+async function createQuestion(
+  field: Exclude<DraftField, "court_name">,
+  pending: PendingActionRow,
+): Promise<LineMessage> {
+  switch (field) {
+    case "court_count":
+      return askCourtCount(pending.id);
+    case "play_date":
+    case "start_time": {
+      const venue = await findLatestVenue(pending.line_group_id);
+      return askWhen(pending.id, venue?.start_time);
+    }
+    case "duration_minutes":
+      return askDuration(pending.id);
+  }
 }
 
 /**

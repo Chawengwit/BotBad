@@ -1,5 +1,11 @@
 import type { LineMessage } from "@/lib/line";
-import { askCourtCount, confirmCancelGame, confirmCloseGame, editMenu } from "@/line/messages";
+import {
+  askCourtCount,
+  confirmCancelGame,
+  confirmCloseGame,
+  editMenu,
+  helpMenu,
+} from "@/line/messages";
 import type { UserRow } from "@/repositories/types";
 import { startCancelGame, startCloseGame, startEditGame } from "@/services/game-admin.service";
 import { startCreateGame } from "@/services/game.service";
@@ -16,6 +22,8 @@ import { WAKE_WORD } from "./wake-word";
 
 /** คำสั่งที่ทำงานได้แล้ว ส่วนที่เหลือรอขั้นตอนถัดไปของ spec §29 */
 export const RULE_COMMANDS = [
+  "เมนู",
+  "ช่วยด้วย",
   "เปิดตี",
   "ลงชื่อ",
   "ถอนชื่อ",
@@ -35,10 +43,12 @@ export const RULE_COMMANDS = [
 export type RuleCommand = (typeof RULE_COMMANDS)[number];
 
 /**
- * คำสั่งที่ตอบกลับมาเป็นคำถามหรือการ์ดให้ยืนยัน ไม่ใช่งานที่จบในตัว
+ * คำสั่งที่ตอบกลับมาเป็นคำถาม เมนู หรือการ์ดให้ยืนยัน ไม่ใช่งานที่จบในตัว
  * ใช้ตัดสินว่าหลังตอบแล้วต้องเปิดโหมดฟังต่อไหม (spec §6)
  */
-const WIZARD_COMMANDS: readonly RuleCommand[] = [
+const OPEN_ENDED_COMMANDS: readonly RuleCommand[] = [
+  "เมนู",
+  "ช่วยด้วย",
   "เปิดตี",
   "แก้ไข",
   "ยกเลิก",
@@ -53,8 +63,8 @@ export function isRuleCommand(command: string): command is RuleCommand {
 }
 
 /** คำสั่งนี้เปิดเรื่องค้างไว้ไหม ถ้าใช่แปลว่ายังคุยกันไม่จบ */
-export function opensWizard(command: RuleCommand): boolean {
-  return WIZARD_COMMANDS.includes(command);
+export function keepsConversationOpen(command: RuleCommand): boolean {
+  return OPEN_ENDED_COMMANDS.includes(command);
 }
 
 /** ตัด wake word ออกและเก็บเฉพาะคำสั่ง */
@@ -69,6 +79,9 @@ export async function handleRuleCommand(input: {
   user: UserRow;
 }): Promise<LineMessage[]> {
   switch (input.command) {
+    case "เมนู":
+    case "ช่วยด้วย":
+      return [helpMenu()];
     case "เปิดตี": {
       const pending = await startCreateGame(input.lineGroupId, input.user.id);
       return [askCourtCount(pending.id)];

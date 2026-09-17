@@ -11,6 +11,7 @@ import {
   openListeningWindow,
 } from "@/repositories/session.repository";
 import { canRunDbTests, createTestSql, testLineUserId } from "./helpers";
+import { messageTexts } from "../helpers";
 
 const GROUP_ID = "C-test-listening";
 const ACCESS_TOKEN = "test-access-token";
@@ -41,12 +42,6 @@ vi.mock("@/lib/gemini", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/gemini")>()),
   createGeminiClient: () => currentClient,
 }));
-
-function messageTexts(messages: LineMessage[]): string {
-  return messages
-    .map((message) => (message.type === "text" ? message.text : message.template.text))
-    .join("\n");
-}
 
 describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อมูลจริง, schema bot_test)", () => {
   let sql: Sql;

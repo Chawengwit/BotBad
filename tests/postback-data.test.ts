@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parsePostbackData } from "@/router/postback";
 import { askCourtCount, askDate, askDuration, askTime, confirmCreateGame } from "@/line/messages";
+import { buttonData, messageText } from "./helpers";
 import { missingDraftFields } from "@/services/game.service";
 
 const PENDING_ID = "6c2a2f16-9a7f-4f8e-9b4e-2d0f1a2b3c4d";
@@ -92,15 +93,15 @@ describe("ปุ่มที่บอทส่งออกไป", () => {
       court_name: "ABC Badminton",
     });
 
-    expect(message.template.text).toContain("พุธ 16 ก.ย.");
-    expect(message.template.text).toContain("19:00 - 21:00");
-    expect(message.template.text).toContain("รับ 8 คน");
-    expect(message.template.actions.map((action) => parsePostbackData((action as { data: string }).data)?.action)).toEqual([
-      "confirm",
-      "reject",
-    ]);
-    // ข้อความในปุ่ม template ของ LINE ยาวได้ไม่เกิน 160 ตัวอักษร
-    expect(message.template.text.length).toBeLessThanOrEqual(160);
+    const body = messageText(message);
+    expect(body).toContain("ABC Badminton");
+    expect(body).toContain("พุธ 16 ก.ย.");
+    expect(body).toContain("19:00 - 21:00");
+    expect(body).toContain("รับ 8 คน");
+
+    // การ์ดยืนยันเป็น Flex แล้ว ปุ่มอยู่ที่ footer ไม่ติดเพดาน 160 ตัวอักษรอีก
+    expect(parsePostbackData(buttonData([message], "✅ เปิดตี") ?? "")?.action).toBe("confirm");
+    expect(parsePostbackData(buttonData([message], "❌ ยกเลิก") ?? "")?.action).toBe("reject");
   });
 });
 
@@ -108,22 +109,21 @@ describe("missingDraftFields", () => {
   it("บอกช่องที่ขาดเรียงตามลำดับคำถาม", () => {
     expect(missingDraftFields({})).toEqual([
       "court_count",
-      "max_players",
       "play_date",
       "start_time",
       "duration_minutes",
       "court_name",
     ]);
-    expect(missingDraftFields({ court_count: 2, max_players: 16, play_date: "2026-09-16" })).toEqual([
+    expect(missingDraftFields({ court_count: 2, play_date: "2026-09-16" })).toEqual([
       "start_time",
       "duration_minutes",
       "court_name",
     ]);
   });
 
-  it("จำนวนคนและชื่อคอร์ทก็ต้องมี", () => {
-    expect(missingDraftFields({ max_players: 1 })).toContain("max_players");
-    expect(missingDraftFields({ max_players: 100 })).toContain("max_players");
+  // จำนวนคนคิดจากคอร์ทให้เอง wizard จึงไม่ถาม และไม่นับว่า "ขาด"
+  it("ไม่ถามจำนวนคน แต่ชื่อคอร์ทยังต้องมี", () => {
+    expect(missingDraftFields({})).not.toContain("max_players");
     expect(missingDraftFields({ court_name: "   " })).toContain("court_name");
     expect(missingDraftFields({ court_name: "x".repeat(61) })).toContain("court_name");
   });

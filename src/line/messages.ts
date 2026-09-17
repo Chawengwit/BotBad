@@ -1,6 +1,27 @@
 import type { ErrorCode } from "@/errors/app-errors";
-import type { ButtonsMessage, LineMessage, MessageAction, TextMessage } from "@/lib/line";
-import { formatDuration, formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
+import type {
+  ButtonsMessage,
+  FlexComponent,
+  FlexMessage,
+  LineMessage,
+  MessageAction,
+  TextMessage,
+} from "@/lib/line";
+import {
+  amountRow,
+  bubble,
+  COLOR,
+  flexMessage,
+  footerButtons,
+  header,
+  hbox,
+  infoRow,
+  note,
+  separator,
+  title,
+  vbox,
+} from "./flex";
+import { addDays, formatDuration, formatThaiDate, formatTimeRange, todayInBangkok } from "@/lib/time";
 import type { PendingActionType } from "@/repositories/pending-action.repository";
 import { WAKE_WORD } from "@/router/wake-word";
 import { MAX_PLAYERS, MIN_PLAYERS, type GameDraft } from "@/services/game.service";
@@ -90,6 +111,47 @@ export function askTime(pendingId: string): ButtonsMessage {
   ]);
 }
 
+/** เวลาตั้งต้นเวลาไม่รู้ว่ากลุ่มนี้ชอบตีกี่โมง */
+export const DEFAULT_START_TIME = "19:00";
+
+/**
+ * ถามวันและเวลาในคำถามเดียว (spec §9.1)
+ * แยกเป็นสองขั้นตอนไม่ได้ช่วยอะไร เพราะคนนึกออกพร้อมกันอยู่แล้วว่าจะตีเมื่อไหร่
+ *
+ * ปุ่มลัดใช้เวลาของรอบที่แล้วเป็นตัวตั้ง เพราะก๊วนส่วนใหญ่ตีเวลาเดิมทุกสัปดาห์
+ * ค่าในปุ่มคำนวณตั้งแต่ตอนสร้างปุ่ม ป้ายบอกอะไรก็ได้อย่างนั้นจริง ๆ
+ */
+export function askWhen(
+  pendingId: string,
+  usualTime: string = DEFAULT_START_TIME,
+  today: string = todayInBangkok(),
+): ButtonsMessage {
+  const shortcut = (label: string, date: string) => ({
+    type: "postback" as const,
+    label: `${label} ${usualTime}`,
+    displayText: `${label} ${usualTime}`,
+    data: wizardData(pendingId, "when", `${date} ${usualTime}`),
+  });
+
+  return buttons("เมื่อไหร่?", "📅 ตีเมื่อไหร่?", [
+    shortcut("วันนี้", today),
+    shortcut("พรุ่งนี้", addDays(today, 1)),
+    {
+      type: "datetimepicker",
+      label: "เลือกวันและเวลา",
+      mode: "datetime",
+      initial: `${today}T${usualTime}`,
+      min: `${today}T00:00`,
+      data: new URLSearchParams({
+        action: "wizard",
+        pending_id: pendingId,
+        step: "when",
+        value: "picker",
+      }).toString(),
+    },
+  ]);
+}
+
 export function askDuration(pendingId: string): ButtonsMessage {
   return buttons(
     "เล่นกี่ชั่วโมง?",
@@ -143,6 +205,40 @@ export function askMaxPlayers(pendingId: string, courtCount: number): TextMessag
 
 export function askCourtName(): TextMessage {
   return text("🏟️ ไปตีที่คอร์ทไหน?\n\nพิมพ์ชื่อคอร์ทตอบได้เลย ไม่ต้องขึ้นต้นด้วย “บอทจ๋า”");
+}
+
+/**
+ * ก๊วนประจำตีที่เดิมทุกสัปดาห์ ถามทีเดียวแทนที่จะไล่ถามชื่อคอร์ท แผนที่ และพร้อมเพย์ทีละข้อ
+ * กด "ที่เดิม" = ยกทั้งสามค่าจากรอบก่อนมาเลย กด "เปลี่ยน" = ถามทีละข้อแบบเดิม
+ */
+export function askSameVenue(
+  pendingId: string,
+  courtName: string,
+  hasMap: boolean,
+  promptpay: string | null,
+): ButtonsMessage {
+  const body = [
+    "🏟️ ที่เดิมไหม?",
+    "",
+    courtName,
+    ...(hasMap ? ["📍 มีลิงก์แผนที่"] : []),
+    ...(promptpay ? [`💸 พร้อมเพย์ ${formatPromptPay(promptpay)}`] : []),
+  ].join("\n");
+
+  return buttons("ที่เดิมไหม?", body, [
+    {
+      type: "postback",
+      label: "✅ ที่เดิม",
+      displayText: "ที่เดิม",
+      data: wizardData(pendingId, "venue", "same"),
+    },
+    {
+      type: "postback",
+      label: "✏️ เปลี่ยนที่",
+      displayText: "เปลี่ยนที่",
+      data: wizardData(pendingId, "venue", "change"),
+    },
+  ]);
 }
 
 export function askLocation(pendingId: string): TextMessage {
@@ -213,6 +309,33 @@ export function greeting(): TextMessage {
   };
 }
 
+/**
+ * เมนูช่วยเหลือ — เป็นหนึ่งในกรณีที่แนบปุ่มได้ เพราะบอทรอคำสั่งอยู่ (spec §23)
+ * สำคัญขึ้นมากตั้งแต่เลิกแนบปุ่มท้ายผลลัพธ์ เพราะนี่คือทางเดียวที่คนใหม่ในกลุ่มจะรู้ว่าสั่งอะไรได้
+ */
+export function helpMenu(): TextMessage {
+  return {
+    type: "text",
+    text: [
+      "🏸 บอทจ๋าช่วยอะไรได้บ้าง",
+      "",
+      "รอบตี",
+      "• เปิดตี — เปิดรอบใหม่",
+      "• ลงชื่อ / ถอนชื่อ",
+      "• ใครตีบ้าง — ดูรายชื่อ",
+      "• แก้ไข / ยกเลิก / ปิดรอบ (เฉพาะคนเปิดรอบ)",
+      "",
+      "ค่าใช้จ่าย",
+      "• คิดเงิน — หารค่าคอร์ทและลูกแบด (เฉพาะคนเปิดรอบ)",
+      "• บิล / ใครยังไม่จ่าย",
+      "• จ่ายแล้ว / ยังไม่จ่าย",
+      "",
+      `พิมพ์ "${WAKE_WORD}" นำหน้า หรือเรียก "${WAKE_WORD}" เฉย ๆ ครั้งเดียวแล้วสั่งต่อได้เลย`,
+    ].join("\n"),
+    quickReply: commandShortcuts(["เปิดตี", "ลงชื่อ", "ใครตีบ้าง", "คิดเงิน"]),
+  };
+}
+
 /** ผู้ใช้บอกเองว่าจบแล้ว ปิดโหมดฟังทันทีไม่ต้องรอหมดเวลา */
 export function goodbye(): TextMessage {
   return text("ได้เลยครับ 👋 เรียก \"บอทจ๋า\" ได้ใหม่ทุกเมื่อ");
@@ -243,38 +366,63 @@ function confirmActions(
   ];
 }
 
-export function confirmCreateGame(pendingId: string, draft: GameDraft): ButtonsMessage {
-  const summary = [
-    `🏟️ ${draft.court_name}`,
-    `📅 ${formatThaiDate(draft.play_date)}`,
-    `⏰ ${formatTimeRange(draft.start_time, draft.duration_minutes)}`,
-    `🏸 ${draft.court_count} คอร์ท · 👥 รับ ${draft.max_players} คน`,
-    ...(draft.location_url ? ["📍 มีลิงก์แผนที่"] : []),
-    ...(draft.promptpay ? [`💸 พร้อมเพย์ ${formatPromptPay(draft.promptpay)}`] : []),
-    "",
-    "ยืนยันไหม?",
-  ].join("\n");
+export function confirmCreateGame(pendingId: string, draft: GameDraft): FlexMessage {
+  return flexMessage(
+    "ยืนยันเปิดรอบตี?",
+    bubble({
+      header: header("🏸 เปิดรอบตีแบด"),
+      body: vbox(
+        [
+          title(draft.court_name),
+          vbox(
+            [
+              infoRow("📅", formatThaiDate(draft.play_date)),
+              infoRow("⏰", formatTimeRange(draft.start_time, draft.duration_minutes)),
+              infoRow("🏸", `${draft.court_count} คอร์ท`),
+              infoRow("👥", `รับ ${draft.max_players} คน`),
+              ...(draft.location_url ? [infoRow("📍", "มีลิงก์แผนที่")] : []),
+              ...(draft.promptpay ? [infoRow("💸", formatPromptPay(draft.promptpay))] : []),
+            ],
+            { spacing: "sm", margin: "lg" },
+          ),
+        ],
+        { paddingAll: "20px" },
+      ),
+      footer: footerButtons(confirmActions(pendingId, "✅ เปิดตี")),
+    }),
+  );
+}
 
-  return buttons("ยืนยันเปิดรอบตี?", summary, confirmActions(pendingId, "✅ เปิดตี"));
+/** บรรทัดข้อมูลรอบตีที่ใช้ทั้งการ์ดรอบและการ์ดรายชื่อ */
+function gameRows(game: GameRow, playerLine: string): FlexComponent[] {
+  return [
+    infoRow("📅", formatThaiDate(game.play_date)),
+    infoRow("⏰", formatTimeRange(game.start_time, game.duration_minutes)),
+    infoRow("🏸", `${game.court_count} คอร์ท`),
+    infoRow("👥", playerLine),
+    // ใน Flex ข้อความไม่กลายเป็นลิงก์ให้เอง ต้องผูก action เข้ากับบรรทัดนั้นเอง
+    ...(game.location_url
+      ? [infoRow("📍", "เปิดแผนที่", { type: "uri" as const, label: "แผนที่", uri: game.location_url })]
+      : []),
+  ];
 }
 
 /**
- * การ์ดรอบตี — ข้อความล้วน ไม่มีปุ่ม (spec §23)
+ * การ์ดรอบตี — Flex ไม่มีปุ่ม (spec §23)
  * LINE แก้ข้อความที่ส่งไปแล้วไม่ได้ ทุกครั้งที่มีความเคลื่อนไหวจึงส่งการ์ดใบใหม่
- *
- * ไม่ใช้ buttons template แล้ว เลยไม่ติดเพดาน 160 ตัวอักษร
- * จึงแสดงชื่อคอร์ทคู่กับหัวข้อ และใส่ลิงก์แผนที่ไปด้วยได้
  */
-export function gameCard(game: GameRow, joinedCount: number, headline?: string): TextMessage {
-  return text(
-    [
-      ...(headline ? [headline, ""] : []),
-      `🏟️ ${game.court_name ?? "BADMINTON"}`,
-      `📅 ${formatThaiDate(game.play_date)}`,
-      `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
-      `🏸 ${game.court_count} คอร์ท · 👥 ${joinedCount}/${game.max_players} คน`,
-      ...(game.location_url ? [`📍 ${game.location_url}`] : []),
-    ].join("\n"),
+export function gameCard(game: GameRow, joinedCount: number, headline?: string): FlexMessage {
+  const courtName = game.court_name ?? "BADMINTON";
+
+  return flexMessage(
+    `${headline ?? courtName} ${formatThaiDate(game.play_date)}`,
+    bubble({
+      ...(headline ? { header: header(headline) } : {}),
+      body: vbox(
+        [title(courtName), vbox(gameRows(game, `${joinedCount}/${game.max_players} คน`), { spacing: "sm", margin: "lg" })],
+        { paddingAll: "20px" },
+      ),
+    }),
   );
 }
 
@@ -298,21 +446,33 @@ export function leftNotice(
   return text(`👋 ${displayName} ถอนชื่อแล้ว\n👥 ${joinedCount}/${maxPlayers} คน`);
 }
 
-export function playerList(game: GameRow, players: { display_name: string }[]): TextMessage {
-  const names = players.map((player, index) => `${index + 1}. ${player.display_name}`);
+export function playerList(game: GameRow, players: { display_name: string }[]): FlexMessage {
+  const courtName = game.court_name ?? "BADMINTON";
 
-  return text(
-    [
-      `🏟️ ${game.court_name ?? "BADMINTON"}`,
-      `📅 ${formatThaiDate(game.play_date)}`,
-      `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
-      `🏸 ${game.court_count} คอร์ท`,
-      ...(game.location_url ? [`📍 ${game.location_url}`] : []),
-      "",
-      `👥 ${players.length}/${game.max_players} คน`,
-      "",
-      ...(names.length > 0 ? names : ["ยังไม่มีคนลงชื่อ"]),
-    ].join("\n"),
+  return flexMessage(
+    `รายชื่อ ${players.length}/${game.max_players} คน`,
+    bubble({
+      body: vbox(
+        [
+          title(courtName),
+          vbox(gameRows(game, `${players.length}/${game.max_players} คน`), { spacing: "sm", margin: "lg" }),
+          separator("lg"),
+          vbox(
+            players.length > 0
+              ? players.map((player, index) => ({
+                  type: "text" as const,
+                  text: `${index + 1}. ${player.display_name}`,
+                  size: "sm",
+                  color: COLOR.ink,
+                  wrap: true,
+                }))
+              : [note("ยังไม่มีคนลงชื่อ")],
+            { spacing: "sm", margin: "lg" },
+          ),
+        ],
+        { paddingAll: "20px" },
+      ),
+    }),
   );
 }
 
@@ -369,15 +529,28 @@ function changeLines(game: GameRow, patch: EditPatch): string[] {
   return lines;
 }
 
-export function confirmEditGame(
-  pendingId: string,
-  game: GameRow,
-  patch: EditPatch,
-): ButtonsMessage {
-  return buttons(
+export function confirmEditGame(pendingId: string, game: GameRow, patch: EditPatch): FlexMessage {
+  return flexMessage(
     "ยืนยันการแก้ไข?",
-    ["✏️ ยืนยันการแก้ไข?", ...changeLines(game, patch)].join("\n"),
-    confirmActions(pendingId, "✅ ยืนยัน"),
+    bubble({
+      header: header("✏️ ยืนยันการแก้ไข?"),
+      body: vbox(
+        [
+          vbox(
+            changeLines(game, patch).map((line) => ({
+              type: "text" as const,
+              text: line,
+              size: "sm",
+              color: COLOR.ink,
+              wrap: true,
+            })),
+            { spacing: "sm" },
+          ),
+        ],
+        { paddingAll: "20px" },
+      ),
+      footer: footerButtons(confirmActions(pendingId, "✅ ยืนยัน")),
+    }),
   );
 }
 
@@ -385,15 +558,20 @@ export function confirmCancelGame(
   pendingId: string,
   game: GameRow,
   joinedCount: number,
-): ButtonsMessage {
-  return buttons(
+): FlexMessage {
+  return flexMessage(
     "ยืนยันยกเลิกรอบตี?",
-    [
-      "⚠️ ยืนยันการยกเลิกรอบตี?",
-      gameSummary(game),
-      `👥 ${joinedCount}/${game.max_players} คน`,
-    ].join("\n"),
-    confirmActions(pendingId, "❌ ยืนยันยกเลิก", "กลับ"),
+    bubble({
+      header: header("⚠️ ยกเลิกรอบตีนี้?", COLOR.warn),
+      body: vbox(
+        [
+          title(game.court_name ?? "BADMINTON"),
+          vbox(gameRows(game, `${joinedCount}/${game.max_players} คน`), { spacing: "sm", margin: "lg" }),
+        ],
+        { paddingAll: "20px" },
+      ),
+      footer: footerButtons(confirmActions(pendingId, "❌ ยืนยันยกเลิก", "กลับ")),
+    }),
   );
 }
 
@@ -401,16 +579,33 @@ export function confirmCancelGame(
  * เตือนว่าใครยังไม่จ่าย แต่ไม่ขวางการปิดรอบ
  * ถ้าห้ามปิด คนที่ไม่จ่ายคนเดียวจะทำให้ทั้งกลุ่มเปิดรอบใหม่ไม่ได้ (PRP §5.7)
  */
-function unpaidWarning(unpaid: BillShareRow[]): string[] {
+function unpaidWarning(unpaid: BillShareRow[]): FlexComponent[] {
   if (unpaid.length === 0) return [];
 
   const total = unpaid.reduce((sum, share) => sum + share.amount_satang, 0);
   return [
-    "",
-    `⚠️ ยังมีคนไม่จ่าย ${unpaid.length} คน`,
-    `${unpaid.map((share) => share.display_name).join(", ")} — รวม ${formatBaht(total)}`,
-    "",
-    'ปิดรอบแล้วยังกด "จ่ายแล้ว" และถาม "ใครยังไม่จ่าย" ได้ตามปกติ',
+    separator("lg"),
+    vbox(
+      [
+        {
+          type: "text",
+          text: `⚠️ ยังมีคนไม่จ่าย ${unpaid.length} คน — รวม ${formatBaht(total)}`,
+          size: "sm",
+          color: COLOR.warn,
+          weight: "bold",
+          wrap: true,
+        },
+        {
+          type: "text",
+          text: unpaid.map((share) => share.display_name).join(", "),
+          size: "sm",
+          color: COLOR.ink,
+          wrap: true,
+        },
+        note('ปิดรอบแล้วยังบอกว่า "จ่ายแล้ว" และถาม "ใครยังไม่จ่าย" ได้ตามปกติ'),
+      ],
+      { spacing: "sm", margin: "lg" },
+    ),
   ];
 }
 
@@ -419,16 +614,21 @@ export function confirmCloseGame(
   game: GameRow,
   joinedCount: number,
   unpaid: BillShareRow[] = [],
-): LineMessage {
-  const body = ["🏁 ปิดรอบตีนี้?", gameSummary(game), `👥 ${joinedCount}/${game.max_players} คน`];
-  const actions = confirmActions(pendingId, "✅ ปิดรอบ", "กลับ");
-
-  // มีรายชื่อค้างจ่ายเมื่อไหร่ ข้อความจะยาวเกิน 160 ตัวอักษรของ buttons template ได้ง่าย
-  if (unpaid.length === 0) return buttons("ปิดรอบตี?", body.join("\n"), actions);
-
-  return quickReplyText(
-    [...body, ...unpaidWarning(unpaid)].join("\n"),
-    actions.map((action) => ({ label: action.label, data: "data" in action ? action.data : "" })),
+): FlexMessage {
+  return flexMessage(
+    "ปิดรอบตี?",
+    bubble({
+      header: header("🏁 ปิดรอบตีนี้?"),
+      body: vbox(
+        [
+          title(game.court_name ?? "BADMINTON"),
+          vbox(gameRows(game, `${joinedCount}/${game.max_players} คน`), { spacing: "sm", margin: "lg" }),
+          ...unpaidWarning(unpaid),
+        ],
+        { paddingAll: "20px" },
+      ),
+      footer: footerButtons(confirmActions(pendingId, "✅ ปิดรอบ", "กลับ")),
+    }),
   );
 }
 
@@ -541,24 +741,30 @@ function itemIcon(label: string): string {
   return "➕";
 }
 
-function itemLines(items: BillItem[]): string[] {
-  return items.map((item) => {
-    const detail =
-      item.quantity > 1
-        ? `${item.label} ${item.quantity} ลูก × ${formatBaht(item.unit_price_satang)}`
-        : item.label;
-    return `${itemIcon(item.label)} ${detail} — ${formatBaht(item.amount_satang)}`;
-  });
+function itemLabel(item: BillItem): string {
+  const detail =
+    item.quantity > 1
+      ? `${item.label} ${item.quantity} ลูก × ${formatBaht(item.unit_price_satang)}`
+      : item.label;
+  return `${itemIcon(item.label)} ${detail}`;
 }
 
-function billLines(game: GameRow, items: BillItem[], totalSatang: number, headCount: number): string[] {
+/** ตัวบิล: รายการทีละบรรทัด ตัวเลขชิดขวา แล้วปิดท้ายด้วยยอดรวมและยอดต่อคน */
+function billBody(
+  game: GameRow,
+  items: BillItem[],
+  totalSatang: number,
+  headCount: number,
+): FlexComponent[] {
   return [
-    `💰 คิดเงินรอบ ${formatThaiDate(game.play_date)}`,
-    "",
-    ...itemLines(items),
-    "──────────",
-    `รวม ${formatBaht(totalSatang)}`,
-    `หาร ${headCount} คน → คนละ ${formatBaht(Math.floor(totalSatang / headCount))}`,
+    title(`คิดเงินรอบ ${formatThaiDate(game.play_date)}`),
+    vbox(
+      items.map((item) => amountRow(itemLabel(item), formatBaht(item.amount_satang))),
+      { spacing: "sm", margin: "lg" },
+    ),
+    separator("lg"),
+    vbox([amountRow("รวม", formatBaht(totalSatang), true)], { margin: "lg" }),
+    note(`หาร ${headCount} คน → คนละ ${formatBaht(Math.floor(totalSatang / headCount))}`),
   ];
 }
 
@@ -568,55 +774,97 @@ export function confirmBill(
   items: BillItem[],
   totalSatang: number,
   headCount: number,
-): TextMessage {
-  return quickReplyText(
-    [...billLines(game, items, totalSatang, headCount), "", "ส่งบิลเข้ากลุ่มเลยไหม?"].join("\n"),
-    confirmActions(pendingId, "✅ ส่งบิล").map((action) => ({
-      label: action.label,
-      data: "data" in action ? action.data : "",
-    })),
+): FlexMessage {
+  return flexMessage(
+    "ส่งบิลเข้ากลุ่มเลยไหม?",
+    bubble({
+      header: header("💰 ตรวจบิลก่อนส่ง"),
+      body: vbox(billBody(game, items, totalSatang, headCount), { paddingAll: "20px" }),
+      footer: footerButtons(confirmActions(pendingId, "✅ ส่งบิล")),
+    }),
   );
 }
 
-/** การ์ดบิล — ข้อความล้วน ใครจ่ายแล้วพิมพ์ "บอทจ๋า จ่ายแล้ว" เอง (spec §23) */
+/** การ์ดบิล — Flex ไม่มีปุ่ม ใครจ่ายแล้วพิมพ์ "บอทจ๋า จ่ายแล้ว" เอง (spec §23) */
 export function billCard(
   game: GameRow,
   bill: BillRow,
   shares: BillShareRow[],
   headline?: string,
-): TextMessage {
+): FlexMessage {
   const { unpaid, settled } = summarize(shares);
 
-  return text(
-    [
-      ...(headline ? [headline, ""] : []),
-      ...billLines(game, bill.items, bill.total_satang, shares.length),
-      ...(game.promptpay ? ["", `💸 พร้อมเพย์ ${formatPromptPay(game.promptpay)}`] : []),
-      "",
-      settled ? "✅ จ่ายครบทุกคนแล้ว" : `⭕ ยังไม่จ่าย ${unpaid.length} คน`,
-    ].join("\n"),
+  return flexMessage(
+    headline ?? `บิลรอบ ${formatThaiDate(game.play_date)}`,
+    bubble({
+      ...(headline ? { header: header(headline) } : {}),
+      body: vbox(
+        [
+          ...billBody(game, bill.items, bill.total_satang, shares.length),
+          separator("lg"),
+          vbox(
+            [
+              ...(game.promptpay ? [infoRow("💸", `พร้อมเพย์ ${formatPromptPay(game.promptpay)}`)] : []),
+              infoRow(
+                settled ? "✅" : "⭕",
+                settled ? "จ่ายครบทุกคนแล้ว" : `ยังไม่จ่าย ${unpaid.length} คน`,
+              ),
+            ],
+            { spacing: "sm", margin: "lg" },
+          ),
+        ],
+        { paddingAll: "20px" },
+      ),
+    }),
   );
 }
 
-export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[]): TextMessage {
-  const { paid, unpaid, unpaidTotalSatang, settled } = summarize(shares);
-  const names = (list: BillShareRow[]) => list.map((share) => share.display_name).join(", ");
+/** รายชื่อว่าใครจ่ายแล้วใครยังค้าง แยกเป็นสองกลุ่มให้กวาดตาดูจบในทีเดียว */
+function payerGroup(heading: string, color: string, names: string[]): FlexComponent[] {
+  if (names.length === 0) return [];
 
-  return text(
-    [
-      `💰 รอบ ${formatThaiDate(game.play_date)} — คนละ ${formatBaht(shares[0]?.amount_satang ?? 0)}`,
-      "",
-      ...(paid.length > 0 ? [`✅ จ่ายแล้ว (${paid.length})`, names(paid), ""] : []),
-      ...(settled
-        ? ["🎉 จ่ายครบทุกคนแล้ว"]
-        : [
-            `⭕ ยังไม่จ่าย (${unpaid.length})`,
-            names(unpaid),
-            "",
-            `ยังไม่ได้รับ ${formatBaht(unpaidTotalSatang)}`,
-            ...(game.promptpay ? [`💸 พร้อมเพย์ ${formatPromptPay(game.promptpay)}`] : []),
-          ]),
-    ].join("\n"),
+  return [
+    vbox(
+      [
+        { type: "text", text: `${heading} (${names.length})`, size: "sm", weight: "bold", color },
+        { type: "text", text: names.join(", "), size: "sm", color: COLOR.ink, wrap: true },
+      ],
+      { spacing: "xs", margin: "lg" },
+    ),
+  ];
+}
+
+export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[]): FlexMessage {
+  const { paid, unpaid, unpaidTotalSatang, settled } = summarize(shares);
+  const names = (list: BillShareRow[]) => list.map((share) => share.display_name);
+
+  return flexMessage(
+    settled ? "จ่ายครบทุกคนแล้ว" : `ยังไม่จ่าย ${unpaid.length} คน`,
+    bubble({
+      body: vbox(
+        [
+          title(`รอบ ${formatThaiDate(game.play_date)}`),
+          note(`คนละ ${formatBaht(shares[0]?.amount_satang ?? 0)}`),
+          ...payerGroup("✅ จ่ายแล้ว", COLOR.accent, names(paid)),
+          ...(settled
+            ? [note("🎉 จ่ายครบทุกคนแล้ว", COLOR.accent)]
+            : [
+                ...payerGroup("⭕ ยังไม่จ่าย", COLOR.warn, names(unpaid)),
+                separator("lg"),
+                vbox(
+                  [
+                    amountRow("ยังไม่ได้รับ", formatBaht(unpaidTotalSatang), true),
+                    ...(game.promptpay
+                      ? [infoRow("💸", `พร้อมเพย์ ${formatPromptPay(game.promptpay)}`)]
+                      : []),
+                  ],
+                  { spacing: "sm", margin: "lg" },
+                ),
+              ]),
+        ],
+        { paddingAll: "20px" },
+      ),
+    }),
   );
 }
 
@@ -644,22 +892,25 @@ export function confirmCancelBill(
   pendingId: string,
   game: GameRow,
   shares: BillShareRow[],
-): TextMessage {
+): FlexMessage {
   const { paid } = summarize(shares);
 
-  return quickReplyText(
-    [
-      `⚠️ ยกเลิกบิลของรอบ ${formatThaiDate(game.play_date)}?`,
-      "",
-      ...(paid.length > 0
-        ? [`มีคนกดว่าจ่ายแล้ว ${paid.length} คน การยกเลิกจะลบบันทึกนั้นทิ้งด้วย`, ""]
-        : []),
-      "ยกเลิกแล้วคิดเงินใหม่ได้เลย",
-    ].join("\n"),
-    confirmActions(pendingId, "🗑️ ยกเลิกบิล").map((action) => ({
-      label: action.label,
-      data: "data" in action ? action.data : "",
-    })),
+  return flexMessage(
+    "ยกเลิกบิล?",
+    bubble({
+      header: header("⚠️ ยกเลิกบิลรอบนี้?", COLOR.warn),
+      body: vbox(
+        [
+          title(formatThaiDate(game.play_date)),
+          ...(paid.length > 0
+            ? [note(`มีคนบอกว่าจ่ายแล้ว ${paid.length} คน การยกเลิกจะลบบันทึกนั้นทิ้งด้วย`, COLOR.warn)]
+            : []),
+          note("ยกเลิกแล้วคิดเงินใหม่ได้เลย"),
+        ],
+        { paddingAll: "20px" },
+      ),
+      footer: footerButtons(confirmActions(pendingId, "🗑️ ยกเลิกบิล")),
+    }),
   );
 }
 

@@ -10,10 +10,14 @@ import {
 import { findOpenGame, insertGame, UNIQUE_VIOLATION } from "@/repositories/game.repository";
 import type { GameRow } from "@/repositories/types";
 
-/** ข้อมูลที่ต้องครบก่อนเปิดรอบได้ เรียงตามลำดับที่ wizard ถาม */
+/**
+ * ข้อมูลที่ต้องถามก่อนเปิดรอบได้ เรียงตามลำดับที่ wizard ถาม
+ *
+ * max_players ไม่อยู่ในนี้ เพราะคิดจากจำนวนคอร์ทได้เอง (คอร์ท x 8) และแทบไม่มีใครเปลี่ยน
+ * ใครอยากปรับจำนวนคนสั่ง "บอทจ๋า แก้ไข" ได้ตลอด
+ */
 export const DRAFT_FIELDS = [
   "court_count",
-  "max_players",
   "play_date",
   "start_time",
   "duration_minutes",
@@ -57,6 +61,11 @@ export const gameDraftSchema = z.object({
 });
 
 export type GameDraft = z.infer<typeof gameDraftSchema>;
+
+/** จำนวนคนตั้งต้นของจำนวนคอร์ทนั้น (spec §7) */
+export function defaultMaxPlayers(courtCount: number): number {
+  return courtCount * 8;
+}
 
 /** ช่องที่ยังขาด เรียงตามลำดับคำถาม */
 export function missingDraftFields(payload: Record<string, unknown>): DraftField[] {

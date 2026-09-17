@@ -52,3 +52,81 @@ export const textEvent = (text: string, source: object | undefined, replyToken =
   ...(source ? { source } : {}),
   message: { type: "text", id: "1", text },
 });
+
+/**
+ * ตัวช่วยอ่านข้อความที่บอทส่งออกไป โดยไม่ต้องสนใจว่าเป็น text, buttons template หรือ Flex
+ * รวมไว้ที่เดียวเพราะทุกชุดเทสต้องการเหมือนกัน และรูปแบบข้อความเปลี่ยนได้เรื่อย ๆ
+ */
+
+type AnyAction = { label?: string; data?: string; uri?: string };
+type AnyComponent = {
+  type: string;
+  text?: string;
+  contents?: AnyComponent[];
+  action?: AnyAction;
+};
+type AnyMessage = {
+  type: string;
+  text?: string;
+  altText?: string;
+  quickReply?: { items: { action: AnyAction }[] };
+  template?: { text?: string; actions?: AnyAction[] };
+  contents?: { header?: AnyComponent; body?: AnyComponent; footer?: AnyComponent };
+};
+
+function walk(component: AnyComponent | undefined, visit: (node: AnyComponent) => void): void {
+  if (!component) return;
+  visit(component);
+  for (const child of component.contents ?? []) walk(child, visit);
+}
+
+function flexParts(message: AnyMessage): AnyComponent[] {
+  const parts: AnyComponent[] = [];
+  for (const section of [message.contents?.header, message.contents?.body, message.contents?.footer]) {
+    walk(section, (node) => parts.push(node));
+  }
+  return parts;
+}
+
+/** ข้อความทั้งหมดในข้อความเดียว ต่อกันด้วยขึ้นบรรทัดใหม่ */
+export function messageText(message: unknown): string {
+  const any = message as AnyMessage;
+
+  if (any.type === "text") return any.text ?? "";
+  if (any.type === "template") return any.template?.text ?? "";
+
+  return flexParts(any)
+    .map((node) => node.text)
+    .filter((text): text is string => typeof text === "string")
+    .join("\n");
+}
+
+export function messageTexts(messages: unknown[]): string {
+  return messages.map(messageText).join("\n");
+}
+
+/** data ของปุ่มชื่อนี้ ไม่ว่าจะอยู่ใน template, quick reply หรือ footer ของ Flex */
+export function buttonData(messages: unknown[], label: string): string | undefined {
+  for (const message of messages as AnyMessage[]) {
+    const actions: AnyAction[] = [
+      ...(message.template?.actions ?? []),
+      ...(message.quickReply?.items ?? []).map((item) => item.action),
+      ...flexParts(message)
+        .map((node) => node.action)
+        .filter((action): action is AnyAction => action !== undefined),
+    ];
+
+    const found = actions.find((action) => action.label === label);
+    if (found?.data) return found.data;
+  }
+  return undefined;
+}
+
+/** บอทแนบปุ่มมากับข้อความนี้ไหม (spec §23) */
+export function hasButtons(message: unknown): boolean {
+  const any = message as AnyMessage;
+
+  if (any.type === "template") return true;
+  if (any.quickReply !== undefined) return true;
+  return flexParts(any).some((node) => node.type === "button");
+}

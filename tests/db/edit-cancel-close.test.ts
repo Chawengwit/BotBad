@@ -8,6 +8,7 @@ import type { GameRow, UserRow } from "@/repositories/types";
 import { loadSessionMessages, saveSessionMessages } from "@/repositories/session.repository";
 import { joinGame } from "@/services/player.service";
 import { canRunDbTests, createTestSql, testLineUserId } from "./helpers";
+import { buttonData, messageTexts } from "../helpers";
 
 const GROUP_ID = "C-test-edit-cancel";
 const ACCESS_TOKEN = "test-access-token";
@@ -45,24 +46,11 @@ function postbackEvent(data: string, lineUserId: string, params: Record<string, 
   };
 }
 
-/** หา data ของปุ่ม ไม่ว่าจะเป็นปุ่มใน template หรือ quick reply */
+/** หา data ของปุ่มชื่อนี้จากข้อความล่าสุด ไม่เจอถือว่าเทสผิดพลาด */
 function actionData(collected: Collected[], label: string): string {
-  for (const message of collected.at(-1)?.messages ?? []) {
-    if (message.type === "template") {
-      const action = message.template.actions.find((item) => item.label === label);
-      if (action && "data" in action) return action.data;
-    } else if (message.quickReply) {
-      const item = message.quickReply.items.find((entry) => entry.action.label === label);
-      if (item && "data" in item.action) return item.action.data;
-    }
-  }
-  throw new Error(`ไม่พบปุ่ม ${label}`);
-}
-
-function messageTexts(messages: LineMessage[]): string {
-  return messages
-    .map((message) => (message.type === "text" ? message.text : message.template.text))
-    .join("\n");
+  const data = buttonData(collected.at(-1)?.messages ?? [], label);
+  if (data === undefined) throw new Error(`ไม่พบปุ่ม ${label}`);
+  return data;
 }
 
 describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิดรอบ (ฐานข้อมูลจริง, schema bot_test)", () => {

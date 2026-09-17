@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { LineMessage } from "@/lib/line";
+import { hasButtons, messageText } from "./helpers";
 import {
   askCourtCount,
   askCourtFee,
@@ -59,11 +59,6 @@ const shares: BillShareRow[] = [
   { id: "2", bill_id: "1", user_id: "2", amount_satang: 30000, paid: false, display_name: "Bank" },
 ];
 
-/** ปุ่มของ LINE มาได้ 2 ทาง: ใน buttons template หรือใน quick reply */
-function hasButtons(message: LineMessage): boolean {
-  return message.type === "template" || message.quickReply !== undefined;
-}
-
 /**
  * บอทแนบปุ่มได้ 3 กรณีเท่านั้น (spec §23)
  *   1. กำลังถามเพื่อเดิน wizard ต่อ
@@ -89,9 +84,9 @@ describe("ข้อความผลลัพธ์ต้องไม่มี�
   });
 
   it("ขอรายชื่อแล้วได้รายชื่ออย่างเดียว ไม่แถการ์ดรอบตีตามมา", () => {
-    const message = playerList(game, [{ display_name: "เชวง" }]);
-    expect(message.text).toContain("เชวง");
-    expect(message.text).not.toContain("ทำอะไรต่อดี");
+    const body = messageText(playerList(game, [{ display_name: "เชวง" }]));
+    expect(body).toContain("เชวง");
+    expect(body).not.toContain("ทำอะไรต่อดี");
   });
 });
 

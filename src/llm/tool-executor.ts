@@ -26,7 +26,7 @@ import {
   startCloseGame,
   validatePatch,
 } from "@/services/game-admin.service";
-import { gameDraftSchema, missingDraftFields } from "@/services/game.service";
+import { defaultMaxPlayers, gameDraftSchema, missingDraftFields } from "@/services/game.service";
 import {
   billDraftSchema,
   buildBillItems,
@@ -137,7 +137,7 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
       const draft = {
         ...args,
         ...(args.max_players === undefined && typeof args.court_count === "number"
-          ? { max_players: args.court_count * 8 }
+          ? { max_players: defaultMaxPlayers(args.court_count) }
           : {}),
       };
 
@@ -150,7 +150,7 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
         requestedBy: user.id,
         actionType: "create_game",
         // มาทาง LLM คือได้ข้อมูลครบมาในประโยคเดียว ไม่ต้องให้ wizard ย้อนไปถามช่องที่ข้ามได้อีก
-        payload: { ...parsed, location_asked: true, promptpay_asked: true },
+        payload: { ...parsed, venue_asked: true, location_asked: true, promptpay_asked: true },
       });
 
       return ok({ status: "awaiting_confirmation" }, [confirmCreateGame(pending.id, parsed)]);

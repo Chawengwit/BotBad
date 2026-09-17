@@ -39,6 +39,8 @@ export const lineEventSchema = z.looseObject({
         .looseObject({
           date: z.string().max(20).optional(),
           time: z.string().max(20).optional(),
+          // mode "datetime" ส่งมาเป็น "yyyy-MM-ddTHH:mm"
+          datetime: z.string().max(30).optional(),
         })
         .optional(),
     })

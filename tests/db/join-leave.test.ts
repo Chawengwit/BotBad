@@ -7,6 +7,7 @@ import { upsertUser } from "@/repositories/user.repository";
 import type { GameRow, UserRow } from "@/repositories/types";
 import { joinGame } from "@/services/player.service";
 import { canRunDbTests, createTestSql, TEST_SCHEMA, testLineUserId } from "./helpers";
+import { messageTexts } from "../helpers";
 
 const GROUP_ID = "C-test-join-leave";
 const ACCESS_TOKEN = "test-access-token";
@@ -42,12 +43,6 @@ function postbackEvent(data: string, lineUserId: string) {
     source: { type: "group", groupId: GROUP_ID, userId: lineUserId },
     postback: { data },
   };
-}
-
-function messageTexts(messages: LineMessage[]): string {
-  return messages
-    .map((message) => (message.type === "text" ? message.text : message.template.text))
-    .join("\n");
 }
 
 describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่อ (ฐานข้อมูลจริง, schema bot_test)", () => {

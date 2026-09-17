@@ -17,7 +17,7 @@ export type DatetimePickerAction = {
   type: "datetimepicker";
   label: string;
   data: string;
-  mode: "date" | "time";
+  mode: "date" | "time" | "datetime";
   initial?: string;
   min?: string;
   max?: string;
@@ -30,7 +30,14 @@ export type TextMessageAction = {
   text: string;
 };
 
-export type MessageAction = PostbackAction | DatetimePickerAction | TextMessageAction;
+/** เปิดลิงก์ภายนอก ใช้กับลิงก์แผนที่บนการ์ด */
+export type UriAction = {
+  type: "uri";
+  label?: string;
+  uri: string;
+};
+
+export type MessageAction = PostbackAction | DatetimePickerAction | TextMessageAction | UriAction;
 
 export type QuickReply = { items: { type: "action"; action: MessageAction }[] };
 
@@ -51,7 +58,68 @@ export type ButtonsMessage = {
   };
 };
 
-export type LineMessage = TextMessage | ButtonsMessage;
+/**
+ * Flex Message — ชุดย่อยของ schema จริงเท่าที่บอทใช้ (spec §23)
+ * จงใจไม่ประกาศทุก property ที่ LINE รองรับ จะได้ไม่ต้องดูแล type ก้อนใหญ่ที่ไม่มีใครเรียก
+ */
+export type FlexText = {
+  type: "text";
+  text: string;
+  size?: string;
+  color?: string;
+  weight?: "regular" | "bold";
+  align?: "start" | "end" | "center";
+  wrap?: boolean;
+  flex?: number;
+  margin?: string;
+  action?: MessageAction;
+};
+
+export type FlexSeparator = {
+  type: "separator";
+  margin?: string;
+  color?: string;
+};
+
+export type FlexButton = {
+  type: "button";
+  action: MessageAction;
+  style?: "primary" | "secondary" | "link";
+  color?: string;
+  height?: "sm" | "md";
+};
+
+export type FlexBox = {
+  type: "box";
+  layout: "vertical" | "horizontal" | "baseline";
+  contents: FlexComponent[];
+  spacing?: string;
+  margin?: string;
+  paddingAll?: string;
+  paddingTop?: string;
+  backgroundColor?: string;
+  cornerRadius?: string;
+  flex?: number;
+};
+
+export type FlexComponent = FlexBox | FlexText | FlexSeparator | FlexButton;
+
+export type FlexBubble = {
+  type: "bubble";
+  size?: "nano" | "micro" | "kilo" | "mega" | "giga";
+  header?: FlexBox;
+  body?: FlexBox;
+  footer?: FlexBox;
+};
+
+export type FlexMessage = {
+  type: "flex";
+  /** ข้อความสำรองที่โผล่ใน notification และในเครื่องที่แสดง Flex ไม่ได้ */
+  altText: string;
+  contents: FlexBubble;
+};
+
+export type LineMessage = TextMessage | ButtonsMessage | FlexMessage;
 
 async function callLineApi(path: string, init: RequestInit, accessToken: string): Promise<Response> {
   const response = await fetch(`${LINE_API}${path}`, {

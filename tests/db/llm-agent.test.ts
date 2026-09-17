@@ -9,6 +9,7 @@ import { upsertUser } from "@/repositories/user.repository";
 import type { GameRow, UserRow } from "@/repositories/types";
 import { joinGame } from "@/services/player.service";
 import { canRunDbTests, createTestSql, testLineUserId } from "./helpers";
+import { messageTexts } from "../helpers";
 
 const GROUP_ID = "C-test-llm";
 
@@ -33,12 +34,6 @@ const call = (name: string, args: Record<string, unknown> = {}): GeminiTurn => (
   text: "",
   calls: [{ name, args }],
 });
-
-function messageTexts(messages: LineMessage[]): string {
-  return messages
-    .map((message) => (message.type === "text" ? message.text : message.template.text))
-    .join("\n");
-}
 
 describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจริง, schema bot_test)", () => {
   let sql: Sql;

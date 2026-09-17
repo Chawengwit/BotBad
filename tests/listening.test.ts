@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isSmallTalk, isStopWord } from "@/router/listening";
 import { buildSystemPrompt, IGNORE_SENTINEL, isIgnoreReply } from "@/llm/system-prompt";
-import { opensWizard, RULE_COMMANDS } from "@/router/rule-commands";
+import { keepsConversationOpen, RULE_COMMANDS } from "@/router/rule-commands";
 
 describe("isStopWord", () => {
   it.each(["พอแล้ว", "พอ", "จบ", "จบแล้ว", "ขอบคุณ", "ขอบคุณ!", "  ขอบใจ  ", "Thanks", "bye"])(
@@ -66,24 +66,24 @@ describe("system prompt", () => {
   });
 });
 
-describe("opensWizard", () => {
-  it.each(["เปิดตี", "แก้ไข", "ยกเลิก", "ปิดรอบ", "คิดเงิน", "ยกเลิกบิล"] as const)(
+describe("keepsConversationOpen", () => {
+  it.each(["เมนู", "ช่วยด้วย", "เปิดตี", "แก้ไข", "ยกเลิก", "ปิดรอบ", "คิดเงิน", "ยกเลิกบิล"] as const)(
     "%s ยังคุยไม่จบ ต้องฟังต่อ",
     (command) => {
-      expect(opensWizard(command)).toBe(true);
+      expect(keepsConversationOpen(command)).toBe(true);
     },
   );
 
   it.each(["ลงชื่อ", "ถอนชื่อ", "ใครตีบ้าง", "รายชื่อ", "บิล", "ใครยังไม่จ่าย", "จ่ายแล้ว", "ยังไม่จ่าย"] as const)(
     "%s จบในตัว ปิดโหมดฟังได้",
     (command) => {
-      expect(opensWizard(command)).toBe(false);
+      expect(keepsConversationOpen(command)).toBe(false);
     },
   );
 
   it("ตัดสินได้ครบทุกคำสั่ง ไม่มีคำสั่งไหนหลุด", () => {
     for (const command of RULE_COMMANDS) {
-      expect(typeof opensWizard(command)).toBe("boolean");
+      expect(typeof keepsConversationOpen(command)).toBe("boolean");
     }
   });
 });

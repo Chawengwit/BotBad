@@ -14,7 +14,7 @@ import {
   NAG_AFTER_CHANGES,
   nagEdits,
 } from "@/line/messages";
-import { findLatestPromptPay, findOpenGame } from "@/repositories/game.repository";
+import { findLatestPromptPay, findLatestVenue, findOpenGame } from "@/repositories/game.repository";
 import {
   expirePendingAction,
   findUsablePendingAction,
@@ -44,9 +44,12 @@ const postbackSchema = z.discriminatedUnion("action", [
       "field",
       "court",
       "max",
+      // "when" ถามวันและเวลาพร้อมกันตอนเปิดรอบ ส่วน "date"/"time" ใช้ตอนแก้ไขทีละช่อง
+      "when",
       "date",
       "time",
       "duration",
+      "venue",
       "location",
       "promptpay",
       // ขั้นของ wizard คิดเงิน
@@ -69,53 +72,65 @@ const postbackSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("bill_status") }),
 ]);
 
-export type PostbackParams = { date?: string; time?: string };
+export type PostbackParams = { date?: string; time?: string; datetime?: string };
 export type PostbackData = z.infer<typeof postbackSchema>;
 
-type DraftStep = "court" | "max" | "date" | "time" | "duration";
+type DraftStep = "court" | "max" | "when" | "date" | "time" | "duration";
 
 export function parsePostbackData(data: string): PostbackData | null {
   const parsed = postbackSchema.safeParse(Object.fromEntries(new URLSearchParams(data)));
   return parsed.success ? parsed.data : null;
 }
 
-/** แปลงค่าที่กดมาเป็นค่าที่จะเก็บลง payload */
+/**
+ * แปลงค่าที่กดมาเป็นค่าที่จะเก็บลง payload
+ * คืนเป็นชุด เพราะปุ่ม "เมื่อไหร่" ให้ทั้งวันและเวลามาพร้อมกัน
+ */
 function draftValue(
   step: DraftStep,
   value: string,
   params: PostbackParams,
   today: string,
-): { field: string; value: number | string } {
+): Record<string, number | string> {
   switch (step) {
     case "court": {
       const count = Number(value);
       if (!Number.isInteger(count) || count < 1 || count > 4) throw new AppError("INTERNAL_ERROR");
-      return { field: "court_count", value: count };
+      return { court_count: count };
     }
     case "max": {
       const count = Number(value);
       if (!Number.isInteger(count) || count < MIN_PLAYERS || count > MAX_PLAYERS) {
         throw new AppError("INTERNAL_ERROR");
       }
-      return { field: "max_players", value: count };
+      return { max_players: count };
+    }
+    case "when": {
+      // ปุ่มลัดฝังวันเวลามาเลย ส่วน picker ส่งมาเป็น "yyyy-MM-ddTHH:mm"
+      const raw = value === "picker" ? (params.datetime ?? "").replace("T", " ") : value;
+      const [date = "", time = ""] = raw.split(" ");
+      if (!DATE_PATTERN.test(date) || !TIME_PATTERN.test(time)) {
+        throw new AppError("INTERNAL_ERROR");
+      }
+      return { play_date: date, start_time: time };
     }
     case "date": {
       const date =
         value === "today" ? today : value === "tomorrow" ? addDays(today, 1) : (params.date ?? "");
       if (!DATE_PATTERN.test(date)) throw new AppError("INTERNAL_ERROR");
-      return { field: "play_date", value: date };
+      return { play_date: date };
     }
     case "time": {
       const time = value === "picker" ? (params.time ?? "") : value;
       if (!TIME_PATTERN.test(time)) throw new AppError("INTERNAL_ERROR");
-      return { field: "start_time", value: time };
+      return { start_time: time };
     }
     case "duration": {
       const minutes = Number(value);
       if (!Number.isInteger(minutes) || minutes <= 0 || minutes % 60 !== 0) {
         throw new AppError("INTERNAL_ERROR");
       }
-      return { field: "duration_minutes", value: minutes };
+      return { duration_minutes: minutes };
     }
   }
 }
@@ -317,6 +332,27 @@ export async function handlePostback(
     });
   }
 
+  if (parsed.step === "venue") {
+    // ปุ่ม "ที่เดิม / เปลี่ยนที่" มีเฉพาะตอนเปิดรอบ
+    if (pending.action_type !== "create_game") throw new AppError("INTERNAL_ERROR");
+    if (parsed.value !== "same" && parsed.value !== "change") throw new AppError("INTERNAL_ERROR");
+
+    if (parsed.value === "change") return advanceCreateWizard(pending, {});
+
+    const venue = await findLatestVenue(input.lineGroupId);
+    if (!venue) throw new AppError("INTERNAL_ERROR");
+
+    const promptpay = await findLatestPromptPay(input.lineGroupId);
+    return advanceCreateWizard(pending, {
+      court_name: venue.court_name,
+      // ที่เดิมแปลว่าแผนที่และเลขโอนก็เหมือนเดิม ไม่ต้องไล่ถามซ้ำอีกสามคำถาม
+      ...(venue.location_url ? { location_url: venue.location_url } : {}),
+      location_asked: true,
+      ...(promptpay ? { promptpay } : {}),
+      promptpay_asked: true,
+    });
+  }
+
   if (parsed.step === "location") {
     // ปุ่มข้าม: เปิดรอบต่อโดยไม่มีแผนที่ ส่วนตอนแก้ไขคือไม่เปลี่ยนอะไร
     if (parsed.value !== "skip") throw new AppError("INTERNAL_ERROR");
@@ -327,11 +363,14 @@ export async function handlePostback(
     return advanceCreateWizard(pending, { location_asked: true });
   }
 
-  const { field, value } = draftValue(parsed.step, parsed.value, input.params, todayInBangkok());
+  const patch = draftValue(parsed.step, parsed.value, input.params, todayInBangkok());
 
   if (pending.action_type === "edit_game") {
+    // เมนูแก้ไขถามทีละช่อง จึงได้ค่ากลับมาช่องเดียวเสมอ
+    const [field, value] = Object.entries(patch)[0] ?? [];
+    if (field === undefined || value === undefined) throw new AppError("INTERNAL_ERROR");
     return advanceEditWizard(pending.id, input.lineGroupId, field, value);
   }
 
-  return advanceCreateWizard(pending, { [field]: value });
+  return advanceCreateWizard(pending, patch);
 }
