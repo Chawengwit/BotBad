@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeSql, type Sql } from "@/lib/db";
 import type { GeminiClient, GeminiTurn } from "@/lib/gemini";
 import type { LineMessage } from "@/lib/line";
@@ -85,8 +85,13 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
     }
   }
 
-  beforeEach(async () => {
+  // สร้าง pool ครั้งเดียวต่อไฟล์ ไม่ใช่ทุกเทส
+  // Supabase free tier มีเพดาน connection และ pool ที่ไม่ได้ปิดจะค้างไว้จนจบ process
+  beforeAll(() => {
     sql = createTestSql();
+  });
+
+  beforeEach(async () => {
     replies = [];
     currentClient = fakeClient([say("ได้เลยครับ")]);
     vi.stubEnv("GEMINI_API_KEY", "fake-key-value");
@@ -239,7 +244,12 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
       expect(await isListening(GROUP_ID, lineUserId)).toBe(false);
     });
 
-    it("LLM บอกว่าไม่เกี่ยวกับบอท ต้องเงียบและปิดโหมดฟัง", async () => {
+    /**
+     * IGNORE แปลว่า "ข้อความนี้ไม่ได้คุยกับบอท" ไม่ใช่ "จบบทสนทนาแล้ว"
+     * เดิมปิดหน้าต่างทิ้ง ประโยคกำกวมประโยคเดียวจึงฆ่าบทสนทนา
+     * แล้วคำสั่งตรงตัวที่พิมพ์ตามมาก็ตกไปด้วย (พบจากการใช้จริง 17 ก.ย. 2026)
+     */
+    it("LLM บอกว่าไม่เกี่ยวกับบอท ต้องเงียบ แต่ยังฟังต่อ", async () => {
       const lineUserId = newUserId();
       await send(lineUserId, "บอทจ๋า");
       currentClient = fakeClient([say("IGNORE")]);
@@ -247,7 +257,7 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
       const messages = await send(lineUserId, "เมื่อวานดูบอลไหม");
 
       expect(messages).toEqual([]);
-      expect(await isListening(GROUP_ID, lineUserId)).toBe(false);
+      expect(await isListening(GROUP_ID, lineUserId)).toBe(true);
       // ข้อความที่ไม่เกี่ยวต้องไม่ถูกจำไว้เป็นบริบท
       const rows = await sql<{ messages: unknown[] }[]>`
         SELECT messages FROM conversation_sessions
@@ -256,7 +266,19 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
       expect(rows[0]?.messages).toEqual([]);
     });
 
-    it("ตีความไม่ออกก็เงียบ ไม่พ่นเมนูใส่กลุ่ม", async () => {
+    it("เงียบเพราะ IGNORE แล้ว คำสั่งตรงตัวที่พิมพ์ตามมาต้องยังทำงาน", async () => {
+      const lineUserId = newUserId();
+      await send(lineUserId, "บอทจ๋า");
+      currentClient = fakeClient([say("IGNORE")]);
+
+      expect(await send(lineUserId, "เหลือใคร")).toEqual([]);
+
+      // ไม่ต้องเรียกชื่อบอทใหม่
+      const messages = await send(lineUserId, "ใครยังไม่จ่าย");
+      expect(messages.length).toBeGreaterThan(0);
+    });
+
+    it("ตีความไม่ออกก็เงียบ ไม่พ่นเมนูใส่กลุ่ม แต่ยังฟังต่อ", async () => {
       const lineUserId = newUserId();
       await send(lineUserId, "บอทจ๋า");
       currentClient = fakeClient([say("")]);
@@ -264,7 +286,7 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
       const messages = await send(lineUserId, "ตกลงว่าไงนะ");
 
       expect(messages).toEqual([]);
-      expect(await isListening(GROUP_ID, lineUserId)).toBe(false);
+      expect(await isListening(GROUP_ID, lineUserId)).toBe(true);
     });
 
     /**

@@ -32,15 +32,14 @@ export type AgentInput = {
   listening?: boolean;
 };
 
+/**
+ * ข้อความที่จะตอบ ว่างเปล่า = เงียบ
+ *
+ * ไม่มีสัญญาณ "ปิดโหมดฟัง" อีกแล้ว เพราะเหตุการณ์เดียวไม่ควรจบบทสนทนา
+ * ทั้งงานที่สำเร็จและข้อความที่ไม่ได้คุยกับบอท ปล่อยให้หน้าต่าง 2 นาทีหมดอายุเอง (spec §6)
+ */
 export type AgentReply = {
   messages: LineMessage[];
-  /**
-   * ข้อความนี้ไม่ได้คุยกับบอท หรือตีความไม่ออกในโหมดฟัง — ผู้เรียกเอาไปปิดโหมดฟัง
-   *
-   * งานที่ "สำเร็จ" ไม่ปิดโหมดฟังแล้ว เพราะสำเร็จคือกรณีปกติที่สุด
-   * ถ้าปิดทุกครั้งที่สำเร็จ ผู้ใช้ต้องเรียก "บอทจ๋า" ใหม่แทบทุกประโยค (spec §6)
-   */
-  ignored: boolean;
 };
 
 function toContents(history: SessionMessage[], userText: string): Content[] {
@@ -141,21 +140,21 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
     // โหมดฟัง: LLM บอกว่าข้อความนี้ไม่ได้คุยกับบอท เงียบและปิดโหมดฟัง
     // ไม่บันทึกลง history ด้วย จะได้ไม่เอาบทสนทนาของคนอื่นไปปนบริบทของบอท
     if (input.listening && attachments.length === 0 && isIgnoreReply(replyText)) {
-      return { messages: [], ignored: true };
+      return { messages: [] };
     }
 
     // ไม่มีทั้งข้อความและปุ่ม แปลว่าไปไม่สุด เช่น วน tool ครบแล้วยังไม่ได้คำตอบ
     if (!replyText && attachments.length === 0) return giveUp(input);
 
     await rememberTurn(input, history, userText, replyText);
-    return { messages: buildReply(replyText, attachments), ignored: false };
+    return { messages: buildReply(replyText, attachments) };
   } catch (error) {
     console.error("[llm] failed:", formatErrorForLog(error));
 
     // งานบางอย่างทำไปแล้วก่อนพัง ต้องส่งการ์ดให้ผู้ใช้เห็น ไม่งั้นจะมีรายการค้างที่ไม่มีปุ่มกด
     if (attachments.length > 0) {
       await rememberTurn(input, [], userText, "").catch(() => {});
-      return { messages: buildReply("นี่คือผลล่าสุดครับ 👇", attachments), ignored: false };
+      return { messages: buildReply("นี่คือผลล่าสุดครับ 👇", attachments) };
     }
     return giveUp(input);
   }
@@ -163,8 +162,9 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
 
 /** ตีความไม่ได้หรือพังไปเลย มีทางเข้าสองทางจึงยอมแพ้คนละแบบ */
 function giveUp(input: AgentInput): AgentReply {
-  if (input.listening) return { messages: [], ignored: true };
-  return { messages: [fallbackMenu()], ignored: false };
+  // โหมดฟัง: เงียบ เพราะไม่รู้ด้วยซ้ำว่าข้อความนั้นคุยกับบอทหรือเปล่า
+  // มี wake word: ต้องได้อะไรกลับไปเสมอ เพราะผู้ใช้เรียกบอทมาเอง
+  return { messages: input.listening ? [] : [fallbackMenu()] };
 }
 
 /** ข้อความจาก LLM + การ์ด รวมแล้วต้องไม่เกินที่ LINE ส่งได้ต่อครั้ง เก็บการ์ดใบล่าสุดไว้ก่อน */

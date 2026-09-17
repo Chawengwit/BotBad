@@ -187,7 +187,7 @@ async function resolveMessages(
         client: createGeminiClient(),
       });
 
-      await setListeningWindow(groupId, userId, !reply.ignored).catch(() => {});
+      await setListeningWindow(groupId, userId, true).catch(() => {});
       return reply.messages;
     }, context.accessToken);
   }
@@ -243,7 +243,10 @@ async function resolveMessages(
       listening: true,
     });
 
-    await setListeningWindow(groupId, userId, !reply.ignored);
+    // ตอบ IGNORE แปลว่า "ข้อความนี้ไม่ได้คุยกับบอท" ไม่ใช่ "จบบทสนทนาแล้ว"
+    // ปิดหน้าต่างตรงนี้ทำให้ประโยคกำกวมประโยคเดียวฆ่าบทสนทนาทิ้ง
+    // แล้วคำสั่งตรงตัวที่พิมพ์ตามมาก็ตกไปด้วย ปล่อยให้ 2 นาทีหมดอายุเองดีกว่า
+    await openListeningWindow(groupId, userId).catch(() => {});
     return reply.messages.length > 0 ? reply.messages : null;
   }, context.accessToken);
 }
