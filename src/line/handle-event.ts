@@ -12,6 +12,7 @@ import {
 import type { LineMessage } from "@/lib/line";
 import type { LineUserRow } from "@/repositories/types";
 import { formatErrorForLog } from "@/lib/log";
+import { easterEggReply } from "@/router/easter-eggs";
 import { isSmallTalk, isStopWord } from "@/router/listening";
 import { handlePostback, parsePostbackData } from "@/router/postback";
 import {
@@ -158,6 +159,10 @@ async function resolveMessages(
       return [goodbye()];
     }
 
+    // มุกประจำก๊วน ตอบทันทีโดยไม่แตะฐานข้อมูลและไม่เปลืองโควตา LLM
+    const joke = easterEggReply(command);
+    if (joke) return [text(joke)];
+
     const parsed = parseCommand(command);
     if (parsed) {
       return runOrExplain(async () => {
@@ -222,6 +227,9 @@ async function resolveMessages(
       await closeListeningWindow(groupId, userId);
       return null;
     }
+
+    const joke = easterEggReply(messageText);
+    if (joke) return [text(joke)];
 
     const user = await ensureUser(groupId, userId, context.accessToken);
 
