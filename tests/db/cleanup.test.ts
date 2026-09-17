@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { closeSql, type Sql } from "@/lib/db";
 import { GET } from "../../app/api/health/route";
 import { createPendingAction, updatePendingPayload } from "@/repositories/pending-action.repository";
@@ -23,8 +23,13 @@ describe.skipIf(!canRunDbTests())("เก็บกวาดข้อมูลห
     }
   }
 
-  beforeEach(async () => {
+  // สร้าง pool ครั้งเดียวต่อไฟล์ ไม่ใช่ทุกเทส
+  // Supabase free tier มีเพดาน connection และ pool ที่ไม่ได้ปิดจะค้างไว้จนจบ process
+  beforeAll(() => {
     sql = createTestSql();
+  });
+
+  beforeEach(async () => {
     await cleanup();
   });
 

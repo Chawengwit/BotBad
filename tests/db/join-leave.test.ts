@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeSql, createSql, type Sql } from "@/lib/db";
 import { handleEvent, type EventContext } from "@/line/handle-event";
 import type { LineMessage } from "@/lib/line";
@@ -59,8 +59,13 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
     }
   }
 
-  beforeEach(async () => {
+  // สร้าง pool ครั้งเดียวต่อไฟล์ ไม่ใช่ทุกเทส
+  // Supabase free tier มีเพดาน connection และ pool ที่ไม่ได้ปิดจะค้างไว้จนจบ process
+  beforeAll(() => {
     sql = createTestSql();
+  });
+
+  beforeEach(async () => {
     // เผื่อรอบก่อนหน้าจบไม่สวย เช่น เทสล้มกลางคัน
     await cleanup();
   });
