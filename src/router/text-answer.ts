@@ -7,7 +7,9 @@ import {
   type PendingPayload,
 } from "@/repositories/pending-action.repository";
 import { findLatestPromptPay } from "@/repositories/game.repository";
-import { parseAmount, parseOtherItem } from "@/services/bill.service";
+import { parseAmount, parseItemLine } from "@/services/bill.service";
+import { resolveOrCreateGuests } from "@/services/people.service";
+import { findUserById } from "@/repositories/user.repository";
 import { courtNameSchema, locationUrlSchema, promptPaySchema } from "@/services/game.service";
 import { advanceBillWizard, advanceCreateWizard, advanceEditWizard } from "./wizard";
 
@@ -89,32 +91,70 @@ async function applyBillAmount(
   awaiting: string,
   text: string,
 ): Promise<LineMessage[]> {
+  // ค่าน้ำพิมพ์ชื่อคนต่อท้ายได้เหมือนรายการอื่น ๆ เช่น "60 เชวง แบงค์"
+  if (awaiting === "bill_water") {
+    return addItemWithPayers(pending, `ค่าน้ำ ${text.trim()}`, () => [
+      askAgain('💧 พิมพ์จำนวนเงิน และใส่ชื่อคนต่อท้ายได้ถ้าเก็บบางคน เช่น "60 เชวง แบงค์"'),
+    ]);
+  }
+
   const amount = parseAmount(text);
   if (amount === null) {
     return [askAgain("💵 พิมพ์เป็นตัวเลขจำนวนเงินนะ เช่น 600 (ไม่เกิน 100,000 บาท)")];
   }
 
-  if (awaiting === "bill_water") {
-    const items = [...((pending.payload.other_items as unknown[]) ?? [])];
-    return advanceBillWizard(pending, {
-      other_items: [...items, { label: "ค่าน้ำ", amount }] as PendingPayload["other_items"],
-    });
-  }
-
   return advanceBillWizard(pending, { [BILL_AMOUNT_FIELDS[awaiting] ?? ""]: amount });
 }
 
-async function applyBillOtherItem(
+function applyBillOtherItem(pending: PendingActionRow, text: string): Promise<LineMessage[]> {
+  return addItemWithPayers(pending, text, () => [
+    askAgain('➕ พิมพ์ชื่อรายการกับจำนวนเงินในบรรทัดเดียว ใส่ชื่อคนต่อท้ายได้ถ้าเก็บบางคน'),
+    askOtherItem(),
+  ]);
+}
+
+/**
+ * เพิ่มรายการเข้าบิล พร้อมรายชื่อคนร่วมจ่ายถ้าระบุมา (PRP guests-split-bills-and-digest §5.3)
+ * ชื่อที่ยังไม่รู้จักถือว่าเป็นแขก สร้างให้เลย เพราะคนพิมพ์กำลังบอกว่าใครกินใครใช้
+ */
+async function addItemWithPayers(
   pending: PendingActionRow,
   text: string,
+  onInvalid: () => LineMessage[],
 ): Promise<LineMessage[]> {
-  const parsed = parseOtherItem(text);
-  if (!parsed) return [askAgain('➕ พิมพ์ชื่อกับจำนวนเงินในบรรทัดเดียวนะ เช่น "ค่าเช่าไม้ 100"'), askOtherItem()];
+  const parsed = parseItemLine(text);
+  if (!parsed) return onInvalid();
 
   const items = [...((pending.payload.other_items as unknown[]) ?? [])];
-  return advanceBillWizard(pending, {
-    other_items: [...items, parsed] as PendingPayload["other_items"],
-  });
+  const patch: PendingPayload = {
+    other_items: [
+      ...items,
+      { label: parsed.label, amount: parsed.amount },
+    ] as PendingPayload["other_items"],
+  };
+
+  if (parsed.payerNames.length > 0) {
+    const actor = await findUserById(pending.requested_by);
+    const people = await resolveOrCreateGuests(
+      pending.line_group_id,
+      parsed.payerNames,
+      actor ?? { id: pending.requested_by, line_user_id: null, line_group_id: null, display_name: "" },
+    );
+
+    const payers = (pending.payload.item_payers ?? {}) as Record<string, string[]>;
+    const names = (pending.payload.payer_names ?? {}) as Record<string, string>;
+
+    patch.item_payers = {
+      ...payers,
+      [parsed.label]: people.map((person) => person.id),
+    } as PendingPayload["item_payers"];
+    patch.payer_names = {
+      ...names,
+      ...Object.fromEntries(people.map((person) => [person.id, person.display_name])),
+    } as PendingPayload["payer_names"];
+  }
+
+  return advanceBillWizard(pending, patch);
 }
 
 /**

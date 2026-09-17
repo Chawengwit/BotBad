@@ -1,15 +1,15 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeSql, type Sql } from "@/lib/db";
 import { isAppError } from "@/errors/app-errors";
-import { cancelBill, findActiveBill } from "@/repositories/bill.repository";
+import { cancelBill, listActiveBills } from "@/repositories/bill.repository";
 import { insertGame, updateGameStatus } from "@/repositories/game.repository";
 import { upsertUser } from "@/repositories/user.repository";
-import type { GameRow, UserRow } from "@/repositories/types";
+import type { GameRow, LineUserRow } from "@/repositories/types";
 import { updatePendingPayload, type PendingPayload } from "@/repositories/pending-action.repository";
 import {
   confirmCreateBill,
   getBill,
-  markMyPayment,
+  markPayment,
   startCreateBill,
   summarize,
   type BillDraft,
@@ -78,14 +78,14 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
   async function cleanup(): Promise<void> {
     await sql`DELETE FROM pending_actions WHERE line_group_id = ${GROUP_ID}`;
-    await sql`DELETE FROM bill_shares WHERE bill_id IN (
-      SELECT b.id FROM bills b JOIN games g ON g.id = b.game_id WHERE g.line_group_id = ${GROUP_ID}
-    )`;
-    await sql`DELETE FROM bills WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
+    // ลบผ่าน line_group_id ของบิลโดยตรง บิลลอย ๆ ไม่มี game_id ให้ไล่ตาม
+    // bill_shares, bill_items และ bill_item_payers หลุดตามด้วย ON DELETE CASCADE
+    await sql`DELETE FROM bills WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM game_players WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
     await sql`DELETE FROM games WHERE line_group_id = ${GROUP_ID}`;
     if (lineUserIds.length > 0) {
       await sql`DELETE FROM users WHERE line_user_id = ANY(${lineUserIds})`;
+      await sql`DELETE FROM users WHERE line_group_id = ${GROUP_ID}`;
       lineUserIds.length = 0;
     }
   }
@@ -105,7 +105,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await closeSql();
   });
 
-  async function newUser(name: string): Promise<UserRow> {
+  async function newUser(name: string): Promise<LineUserRow> {
     const lineUserId = testLineUserId();
     lineUserIds.push(lineUserId);
     return upsertUser(lineUserId, name, sql);
@@ -129,7 +129,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   }
 
   /** เปิดรอบแล้วให้ทุกคนลงชื่อ คนแรกคือผู้สร้างรอบ */
-  async function gameWithPlayers(count: number): Promise<{ owner: UserRow; players: UserRow[] }> {
+  async function gameWithPlayers(count: number): Promise<{ owner: LineUserRow; players: LineUserRow[] }> {
     const owner = await newUser("เชวง");
     await openGame(owner.id);
 
@@ -145,7 +145,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   }
 
   /** เดินทางเดียวกับผู้ใช้จริง: เริ่ม wizard แล้วกดยืนยัน */
-  async function billFor(owner: UserRow, draft: BillDraft): Promise<BillView> {
+  async function billFor(owner: LineUserRow, draft: BillDraft): Promise<BillView> {
     const { pending } = await startCreateBill(GROUP_ID, owner.id);
     await updatePendingPayload(pending.id, draft as PendingPayload);
     return confirmCreateBill(pending.id, GROUP_ID, owner.id);
@@ -195,30 +195,96 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     expect(await errorCode(() => startCreateBill(GROUP_ID, owner.id))).toBe("NO_PLAYERS_TO_SPLIT");
   });
 
-  it("รอบเดียวมีบิลได้ใบเดียว", async () => {
+  // เลิกบังคับ 1 รอบ 1 บิลแล้ว รอบหนึ่งมีได้ทั้งค่าคอร์ทและค่ากินข้าว (PRP §5.1)
+  it("รอบเดียวมีบิลได้หลายใบ แยกกันด้วยชื่อบิล", async () => {
     const { owner } = await gameWithPlayers(4);
-    await billFor(owner, { court_fee: 600 });
+    const first = await billFor(owner, { court_fee: 600 });
 
-    expect(await errorCode(() => startCreateBill(GROUP_ID, owner.id))).toBe("BILL_ALREADY_EXISTS");
-    expect(await sql`SELECT id FROM bills`).toHaveLength(1);
+    const second = await billFor(owner, { court_fee: 200 });
+    expect(second.bill.id).not.toBe(first.bill.id);
+    expect(second.bill.title).not.toBe(first.bill.title);
+    expect(await sql`SELECT id FROM bills`).toHaveLength(2);
+  });
+
+  it("ชื่อบิลซ้ำกับใบที่เปิดอยู่ไม่ได้", async () => {
+    const { owner } = await gameWithPlayers(2);
+    await startCreateBill(GROUP_ID, owner.id, "ค่ากินข้าว");
+
+    // ใบแรกยังไม่ได้ยืนยัน ชื่อจึงยังว่างอยู่ ต้องสร้างจริงก่อนถึงจะชน
+    const { pending } = await startCreateBill(GROUP_ID, owner.id, "ค่ากินข้าว 2");
+    await updatePendingPayload(pending.id, {
+      court_fee: 100,
+      shuttle_count: 0,
+      shuttle_price: null,
+      extras_done: true,
+      item_payers: { ค่าคอร์ท: [owner.id] },
+    } as PendingPayload);
+    await confirmCreateBill(pending.id, GROUP_ID, owner.id);
+
+    expect(await errorCode(() => startCreateBill(GROUP_ID, owner.id, "ค่ากินข้าว 2"))).toBe(
+      "BILL_TITLE_TAKEN",
+    );
+  });
+
+  it("บิลลอย ๆ ไม่ผูกกับรอบ เก็บเฉพาะคนที่ถูกเอ่ยชื่อ", async () => {
+    const { owner, players } = await gameWithPlayers(3);
+    const { pending } = await startCreateBill(GROUP_ID, owner.id, "ค่ากินข้าว");
+
+    await updatePendingPayload(pending.id, {
+      court_fee: null,
+      shuttle_count: 0,
+      shuttle_price: null,
+      other_items: [{ label: "ค่าข้าว", amount: 300 }],
+      item_payers: { ค่าข้าว: [owner.id, players[1]!.id] },
+      extras_done: true,
+    } as PendingPayload);
+
+    const view = await confirmCreateBill(pending.id, GROUP_ID, owner.id);
+    expect(view.bill.game_id).toBeNull();
+    expect(view.bill.title).toBe("ค่ากินข้าว");
+    expect(view.shares).toHaveLength(2);
+    expect(view.shares.every((share) => share.amount_satang === 15000)).toBe(true);
+  });
+
+  it("แต่ละรายการเก็บคนไม่เท่ากันได้ ยอดรายคนจึงต่างกัน", async () => {
+    const { owner, players } = await gameWithPlayers(3);
+    const { pending } = await startCreateBill(GROUP_ID, owner.id);
+
+    await updatePendingPayload(pending.id, {
+      court_fee: 300,
+      shuttle_count: 0,
+      shuttle_price: null,
+      other_items: [{ label: "ค่าน้ำ", amount: 60 }],
+      item_payers: { ค่าน้ำ: [owner.id, players[1]!.id] },
+      extras_done: true,
+    } as PendingPayload);
+
+    const view = await confirmCreateBill(pending.id, GROUP_ID, owner.id);
+    const amountOf = (id: string) =>
+      view.shares.find((share) => share.user_id === id)?.amount_satang;
+
+    // ค่าคอร์ทหาร 3 คน ส่วนค่าน้ำหารเฉพาะสองคน
+    expect(amountOf(players[2]!.id)).toBe(10000);
+    expect(amountOf(players[1]!.id)).toBe(13000);
+    expect(view.shares.reduce((sum, share) => sum + share.amount_satang, 0)).toBe(
+      view.bill.total_satang,
+    );
   });
 
   it("บอกว่าจ่ายแล้ว กดซ้ำ แล้วย้อนกลับได้ ยอดคงเหลือถูกเสมอ", async () => {
     const { owner, players } = await gameWithPlayers(4);
     await billFor(owner, { court_fee: 400 });
 
-    const first = await markMyPayment(GROUP_ID, players[1]!.id, true);
-    expect(first.changed).toBe(true);
-    expect(first.amountSatang).toBe(10000);
+    const first = await markPayment(GROUP_ID, players[1]!, [players[1]!], true);
+    expect(first.people.map((entry) => entry.amountSatang)).toEqual([10000]);
     expect(summarize(first.shares).unpaidTotalSatang).toBe(30000);
 
     // กดซ้ำไม่ใช่ error แค่ไม่มีอะไรเปลี่ยน
-    const again = await markMyPayment(GROUP_ID, players[1]!.id, true);
-    expect(again.changed).toBe(false);
+    const again = await markPayment(GROUP_ID, players[1]!, [players[1]!], true);
+    expect(again.refused).toHaveLength(0);
     expect(summarize(again.shares).unpaidTotalSatang).toBe(30000);
 
-    const undo = await markMyPayment(GROUP_ID, players[1]!.id, false);
-    expect(undo.changed).toBe(true);
+    const undo = await markPayment(GROUP_ID, players[1]!, [players[1]!], false);
     expect(summarize(undo.shares).unpaidTotalSatang).toBe(40000);
   });
 
@@ -227,11 +293,11 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await billFor(owner, { court_fee: 300 });
 
     for (const player of players.slice(0, 2)) {
-      await markMyPayment(GROUP_ID, player.id, true);
+      await markPayment(GROUP_ID, player, [player], true);
     }
     expect(summarize((await getBill(GROUP_ID)).shares).settled).toBe(false);
 
-    const last = await markMyPayment(GROUP_ID, players[2]!.id, true);
+    const last = await markPayment(GROUP_ID, players[2]!, [players[2]!], true);
     expect(summarize(last.shares).settled).toBe(true);
   });
 
@@ -239,8 +305,13 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const { owner } = await gameWithPlayers(2);
     await billFor(owner, { court_fee: 200 });
 
+    // ไม่ throw แล้ว เพราะคำสั่งเดียวกดแทนได้หลายคน คนที่ทำไม่ได้ต้องไม่ล้มทั้งคำสั่ง
     const outsider = await newUser("คนนอก");
-    expect(await errorCode(() => markMyPayment(GROUP_ID, outsider.id, true))).toBe("NOT_IN_BILL");
+    const result = await markPayment(GROUP_ID, outsider, [outsider], true);
+
+    expect(result.people).toHaveLength(0);
+    expect(result.refused).toEqual([{ user: outsider, reason: "not_in_bill" }]);
+    expect(summarize(result.shares).settled).toBe(false);
   });
 
   it("ถอนชื่อหลังคิดเงินแล้ว ยอดในบิลไม่เปลี่ยน", async () => {
@@ -259,13 +330,13 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const { owner, players } = await gameWithPlayers(2);
     await billFor(owner, { court_fee: 200 });
 
-    await updateGameStatus((await getBill(GROUP_ID)).bill.game_id, "completed", sql);
+    await updateGameStatus(String((await getBill(GROUP_ID)).bill.game_id), "completed", sql);
 
     const after = await getBill(GROUP_ID);
     expect(after.shares).toHaveLength(2);
 
-    const paid = await markMyPayment(GROUP_ID, players[1]!.id, true);
-    expect(paid.changed).toBe(true);
+    const paid = await markPayment(GROUP_ID, players[1]!, [players[1]!], true);
+    expect(paid.people).toHaveLength(1);
   });
 
   it("ยกเลิกบิลแล้วคิดใหม่ได้", async () => {
@@ -277,7 +348,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
     const second = await billFor(owner, { court_fee: 800 });
     expect(second.bill.total_satang).toBe(80000);
-    expect((await findActiveBill(GROUP_ID, sql))?.id).toBe(second.bill.id);
+    expect((await listActiveBills(GROUP_ID, sql))[0]?.id).toBe(second.bill.id);
   });
 
   it("เดินครบทั้ง wizard จากคำสั่งจริงจนได้การ์ดบิล", async () => {
@@ -308,18 +379,22 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await handleEvent(postbackEvent(actionData(collected, "ไม่มีแล้ว"), owner.line_user_id), context);
     const confirmText = messageTexts(collected.at(-1)!.messages);
     expect(confirmText).toContain("รวม 600.00");
-    expect(confirmText).toContain("หาร 4 คน → คนละ 150.00");
+    // การ์ดใหม่ขึ้นยอดรายคนแทน "หาร N คน" เพราะแต่ละรายการเก็บคนไม่เท่ากันได้แล้ว
+    expect(confirmText).toContain("600.00");
+    expect(confirmText).toContain("150.00");
 
     await handleEvent(postbackEvent(actionData(collected, "ส่งบิล"), owner.line_user_id), context);
     const cardText = messageTexts(collected.at(-1)!.messages);
     expect(cardText).toContain("คิดเงินแล้ว");
-    expect(cardText).toContain("พร้อมเพย์ 081-234-5678");
+    // การ์ดต้องบอกด้วยว่าโอนให้ใคร ไม่ใช่มีแต่ตัวเลข (PRP §5.2.1)
+    expect(cardText).toContain("โอนให้ เชวง");
+    expect(cardText).toContain("081-234-5678");
     expect(cardText).toContain("ยังไม่จ่าย 4 คน");
 
     // 400 + (2 x 25) + 50 + 100 = 600 บาท
     const stored = await getBill(GROUP_ID);
     expect(stored.bill.total_satang).toBe(60000);
-    expect(stored.bill.items.map((item) => item.label)).toEqual([
+    expect(stored.items.map((item) => item.label)).toEqual([
       "ค่าคอร์ท",
       "ลูกแบด",
       "ค่าน้ำ",
@@ -345,7 +420,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await handleEvent(postbackEvent(actionData(collected, "ส่งบิล"), owner.line_user_id), context);
 
     const stored = await getBill(GROUP_ID);
-    expect(stored.bill.items.map((item) => item.label)).toEqual(["ลูกแบด"]);
+    expect(stored.items.map((item) => item.label)).toEqual(["ลูกแบด"]);
     expect(stored.bill.total_satang).toBe(2500);
   });
 
@@ -369,7 +444,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const context = contextFor(collected, "เชวง");
 
     await handleEvent(textEvent("บอทจ๋า ยกเลิกบิล", owner.line_user_id), context);
-    expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลรอบนี้?");
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลนี้?");
 
     await handleEvent(postbackEvent(actionData(collected, "ยกเลิกบิล"), owner.line_user_id), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลแล้ว");
@@ -381,7 +456,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   it("ปิดรอบได้แม้ยังจ่ายไม่ครบ แต่ต้องเตือนว่าเหลือใคร", async () => {
     const { owner, players } = await gameWithPlayers(3);
     await billFor(owner, { court_fee: 300 });
-    await markMyPayment(GROUP_ID, players[1]!.id, true);
+    await markPayment(GROUP_ID, players[1]!, [players[1]!], true);
 
     const collected: Collected[] = [];
     const context = contextFor(collected, "เชวง");
@@ -397,8 +472,8 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     expect(closedText).toContain("ยังค้างอยู่ 2 คน");
 
     // ปิดรอบแล้วยังตามเก็บต่อได้
-    const paid = await markMyPayment(GROUP_ID, players[2]!.id, true);
-    expect(paid.changed).toBe(true);
+    const paid = await markPayment(GROUP_ID, players[2]!, [players[2]!], true);
+    expect(paid.people).toHaveLength(1);
   });
 
   it("ก๊วนที่ไม่ได้คิดเงิน ปิดรอบได้เหมือนเดิม ไม่มีอะไรมาเตือน", async () => {
@@ -418,15 +493,12 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
   it("รายการที่บันทึกไว้อ่านกลับมาได้ครบ", async () => {
     const { owner } = await gameWithPlayers(2);
-    const { bill } = await billFor(owner, {
-      court_fee: 600,
-      shuttle_count: 3,
-      shuttle_price: 25,
-    });
+    await billFor(owner, { court_fee: 600, shuttle_count: 3, shuttle_price: 25 });
 
     const stored = await getBill(GROUP_ID);
-    expect(stored.bill.items).toEqual(bill.items);
-    expect(stored.bill.items.map((item) => item.label)).toEqual(["ค่าคอร์ท", "ลูกแบด"]);
-    expect(stored.bill.items[1]).toMatchObject({ quantity: 3, unit_price_satang: 2500 });
+    // รายการย้ายจาก jsonb มาอยู่ตาราง bill_items แล้ว (PRP §5.1)
+    expect(stored.items.map((item) => item.label)).toEqual(["ค่าคอร์ท", "ลูกแบด"]);
+    expect(stored.items[1]).toMatchObject({ quantity: 3, unit_price_satang: 2500 });
+    expect(stored.items[1]?.payers).toHaveLength(stored.shares.length);
   });
 });

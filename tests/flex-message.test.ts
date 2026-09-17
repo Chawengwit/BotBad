@@ -13,6 +13,7 @@ import {
   unpaidList,
 } from "@/line/messages";
 import type { BillRow, BillShareRow, GameRow } from "@/repositories/types";
+import { makeBill, makeItem, makeShare } from "./helpers";
 
 const PENDING_ID = "11111111-1111-4111-8111-111111111111";
 /** altText ของ LINE ยาวได้ไม่เกิน 400 ตัวอักษร */
@@ -36,28 +37,21 @@ const game: GameRow = {
 
 const bareGame: GameRow = { ...game, court_name: null, location_url: null, promptpay: null };
 
-const items = [
-  { label: "ค่าคอร์ท", quantity: 1, unit_price_satang: 60000, amount_satang: 60000 },
-  { label: "ลูกแบด", quantity: 4, unit_price_satang: 2500, amount_satang: 10000 },
+const payers = [
+  { user_id: "1", display_name: "เชวง", amount_satang: 30000 },
+  { user_id: "2", display_name: "Bank", amount_satang: 30000 },
 ];
 
-const bill: BillRow = {
-  id: "1",
-  game_id: "1",
-  created_by: "1",
-  status: "sent",
-  items,
-  total_satang: 70000,
-};
+const items = [
+  makeItem(0, "ค่าคอร์ท", 60000, payers),
+  makeItem(1, "ลูกแบด", 10000, [payers[0]!], 4),
+];
 
-const share = (id: string, name: string, paid: boolean): BillShareRow => ({
-  id,
-  bill_id: "1",
-  user_id: id,
-  amount_satang: 35000,
-  paid,
-  display_name: name,
-});
+const bill: BillRow = makeBill();
+const bareBill: BillRow = makeBill({ game_id: null, promptpay: null, title: "ค่ากินข้าว" });
+
+const share = (id: string, name: string, paid: boolean, paidBy: string | null = null): BillShareRow =>
+  makeShare(id, name, paid, 35000, paidBy);
 
 const mixedShares = [share("1", "เชวง", true), share("2", "Bank", false)];
 const allPaid = [share("1", "เชวง", true), share("2", "Bank", true)];
@@ -83,13 +77,13 @@ const CARDS: [string, LineMessage][] = [
   ["ยืนยันยกเลิกรอบ", confirmCancelGame(PENDING_ID, game, 5)],
   ["ยืนยันปิดรอบ", confirmCloseGame(PENDING_ID, game, 8)],
   ["ยืนยันปิดรอบ ทั้งที่ยังมีคนค้าง", confirmCloseGame(PENDING_ID, game, 8, [mixedShares[1]!])],
-  ["ยืนยันส่งบิล", confirmBill(PENDING_ID, game, items, 70000, 2)],
-  ["การ์ดบิล", billCard(game, bill, mixedShares, "💰 คิดเงินแล้ว")],
-  ["การ์ดบิล ไม่มีพร้อมเพย์และจ่ายครบแล้ว", billCard(bareGame, bill, allPaid)],
-  ["ใครยังไม่จ่าย", unpaidList(game, bill, mixedShares)],
-  ["ใครยังไม่จ่าย ตอนจ่ายครบแล้ว", unpaidList(bareGame, bill, allPaid)],
-  ["ยืนยันยกเลิกบิล", confirmCancelBill(PENDING_ID, game, mixedShares)],
-  ["ยืนยันยกเลิกบิล ตอนยังไม่มีใครจ่าย", confirmCancelBill(PENDING_ID, game, [share("2", "Bank", false)])],
+  ["ยืนยันส่งบิล", confirmBill(PENDING_ID, "รอบ พุธ 16 ก.ย.", items, 70000, mixedShares)],
+  ["การ์ดบิล", billCard(bill, items, mixedShares, "💰 คิดเงินแล้ว")],
+  ["การ์ดบิล ไม่มีพร้อมเพย์และจ่ายครบแล้ว", billCard(bareBill, items, allPaid)],
+  ["ใครยังไม่จ่าย", unpaidList(bill, mixedShares)],
+  ["ใครยังไม่จ่าย ตอนจ่ายครบแล้ว", unpaidList(bareBill, allPaid)],
+  ["ยืนยันยกเลิกบิล", confirmCancelBill(PENDING_ID, bill, mixedShares)],
+  ["ยืนยันยกเลิกบิล ตอนยังไม่มีใครจ่าย", confirmCancelBill(PENDING_ID, bill, [share("2", "Bank", false)])],
 ];
 
 function isFlex(message: LineMessage): message is FlexMessage {

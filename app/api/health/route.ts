@@ -5,8 +5,8 @@ import { formatErrorForLog } from "@/lib/log";
 export const runtime = "nodejs";
 
 /**
- * ตรวจว่าแอปกับฐานข้อมูลยังคุยกันได้
- * Vercel Cron เรียกวันละครั้ง เพื่อไม่ให้โปรเจค Supabase แบบ Free ถูก pause จากการไม่มีการใช้งาน
+ * ตรวจว่าแอปกับฐานข้อมูลยังคุยกันได้ ไว้เช็กด้วยมือ
+ * งานกัน Supabase pause ย้ายไปอยู่ที่ /api/cron/daily ซึ่งเป็นตัวที่ Vercel Cron เรียกแล้ว
  */
 export async function GET(request: Request): Promise<Response> {
   // ตั้ง CRON_SECRET ไว้เมื่อไหร่ ก็ต้องส่ง Authorization มาด้วยเมื่อนั้น

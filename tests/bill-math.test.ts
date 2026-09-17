@@ -1,14 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { isAppError } from "@/errors/app-errors";
 import {
+  attachPayers,
   billDraftSchema,
   buildBillItems,
+  parseItemLine,
+  splitByItem,
   splitEqually,
   summarize,
   toSatang,
   totalOf,
 } from "@/services/bill.service";
 import type { BillShareRow } from "@/repositories/types";
+import { makeShare } from "./helpers";
 
 function errorCode(run: () => unknown): string {
   try {
@@ -132,16 +136,8 @@ describe("splitEqually", () => {
 });
 
 describe("summarize", () => {
-  function share(id: string, amount: number, paid: boolean): BillShareRow {
-    return {
-      id,
-      bill_id: "1",
-      user_id: id,
-      amount_satang: amount,
-      paid,
-      display_name: `คนที่ ${id}`,
-    };
-  }
+  const share = (id: string, amount: number, paid: boolean): BillShareRow =>
+    makeShare(id, `คนที่ ${id}`, paid, amount);
 
   it("แยกคนจ่ายแล้วกับคนค้าง พร้อมยอดที่ยังไม่ได้รับ", () => {
     const result = summarize([
@@ -162,5 +158,142 @@ describe("summarize", () => {
 
   it("บิลที่ไม่มีใครอยู่ในนั้น ไม่นับว่าจ่ายครบ", () => {
     expect(summarize([]).settled).toBe(false);
+  });
+});
+
+/**
+ * หารทีละรายการ ไม่ใช่หารยอดรวม (PRP guests-split-bills-and-digest §5.5)
+ * ยอดของแต่ละคนจึงไม่เท่ากันได้ ต่างจากบิลรุ่นก่อนที่ทุกคนเท่ากันเสมอ
+ */
+describe("splitByItem", () => {
+  const item = (label: string, amount: number) => ({
+    label,
+    quantity: 1,
+    unit_price_satang: amount,
+    amount_satang: amount,
+  });
+
+  const amountOf = (shares: { userId: string; amountSatang: number }[], userId: string) =>
+    shares.find((share) => share.userId === userId)?.amountSatang ?? 0;
+
+  it("รายการที่เก็บบางคน คนนอกไม่ต้องจ่ายรายการนั้น", () => {
+    const result = splitByItem(
+      [
+        { item: item("ค่าคอร์ท", 60000), payerIds: ["1", "2", "3"] },
+        { item: item("ค่าน้ำ", 6000), payerIds: ["1", "2"] },
+      ],
+      "1",
+    );
+
+    expect(result.totalSatang).toBe(66000);
+    expect(amountOf(result.shares, "1")).toBe(20000 + 3000);
+    expect(amountOf(result.shares, "2")).toBe(20000 + 3000);
+    expect(amountOf(result.shares, "3")).toBe(20000);
+  });
+
+  it("ผลรวมของทุกคนต้องเท่ากับยอดบิลเสมอ แม้หารไม่ลงตัว", () => {
+    for (let people = 1; people <= 64; people += 1) {
+      const ids = Array.from({ length: people }, (_, index) => String(index + 1));
+      const result = splitByItem(
+        [
+          { item: item("ค่าคอร์ท", 76000), payerIds: ids },
+          { item: item("ค่าน้ำ", 6000), payerIds: ids.slice(0, Math.max(1, people - 1)) },
+        ],
+        "1",
+      );
+
+      const sum = result.shares.reduce((total, share) => total + share.amountSatang, 0);
+      expect(sum, `${people} คน`).toBe(result.totalSatang);
+
+      for (const built of result.items) {
+        const itemSum = built.payers.reduce((total, payer) => total + payer.amountSatang, 0);
+        expect(itemSum, `${built.label} ${people} คน`).toBe(built.amountSatang);
+      }
+    }
+  });
+
+  it("เศษของแต่ละรายการตกที่คนสร้างบิล", () => {
+    const result = splitByItem([{ item: item("ค่าคอร์ท", 10000), payerIds: ["1", "2", "3"] }], "2");
+
+    expect(amountOf(result.shares, "2")).toBe(3334);
+    expect(amountOf(result.shares, "1")).toBe(3333);
+    expect(amountOf(result.shares, "3")).toBe(3333);
+  });
+
+  it("คนสร้างบิลไม่ได้ร่วมจ่ายรายการนั้น เศษตกที่คนแรกของรายการ", () => {
+    const result = splitByItem([{ item: item("ค่าน้ำ", 10000), payerIds: ["2", "3", "4"] }], "1");
+
+    expect(amountOf(result.shares, "2")).toBe(3334);
+    expect(amountOf(result.shares, "3")).toBe(3333);
+  });
+
+  it("รายการที่ไม่มีคนร่วมจ่ายเลย คิดไม่ได้", () => {
+    expect(
+      errorCode(() => splitByItem([{ item: item("ค่าน้ำ", 6000), payerIds: [] }], "1")),
+    ).toBe("NO_PLAYERS_TO_SPLIT");
+  });
+
+  it("บิลที่ไม่มีรายการเลย คิดไม่ได้", () => {
+    expect(errorCode(() => splitByItem([], "1"))).toBe("AMOUNT_INVALID");
+  });
+});
+
+/** รายการพิมพ์บรรทัดเดียว พร้อมระบุคนร่วมจ่ายได้ (PRP guests-split-bills-and-digest §5.3) */
+describe("parseItemLine", () => {
+  it.each([
+    ["ค่าเช่าไม้ 100", "ค่าเช่าไม้", 100, []],
+    ["ค่าน้ำ 60 เชวง แบงค์", "ค่าน้ำ", 60, ["เชวง", "แบงค์"]],
+    ["ค่าน้ำ 60 บาท เชวง", "ค่าน้ำ", 60, ["เชวง"]],
+    ["ค่าขนม 12.50", "ค่าขนม", 12.5, []],
+    ["ค่าน้ำ 60, เชวง, แบงค์", "ค่าน้ำ", 60, ["เชวง", "แบงค์"]],
+  ])("%s", (input, label, amount, payerNames) => {
+    expect(parseItemLine(input)).toEqual({ label, amount, payerNames });
+  });
+
+  it.each(["", "ค่าน้ำ", "60", "ค่าน้ำ ศูนย์บาท"])("ไม่รับ %s", (input) => {
+    expect(parseItemLine(input)).toBeNull();
+  });
+
+  it("จำนวนเงินเป็นตัวคั่น ชื่อรายการมีช่องว่างได้", () => {
+    expect(parseItemLine("ค่า เช่า ไม้ 100 ฮก")).toEqual({
+      label: "ค่า เช่า ไม้",
+      amount: 100,
+      payerNames: ["ฮก"],
+    });
+  });
+});
+
+describe("attachPayers", () => {
+  const item = (label: string) => ({
+    label,
+    quantity: 1,
+    unit_price_satang: 10000,
+    amount_satang: 10000,
+  });
+
+  it("รายการที่ไม่ระบุคน เก็บทุกคนในบิล", () => {
+    const result = attachPayers([item("ค่าคอร์ท")], {}, ["1", "2", "3"]);
+    expect(result[0]?.payerIds).toEqual(["1", "2", "3"]);
+  });
+
+  it("รายการที่ระบุคน เก็บเฉพาะคนนั้น", () => {
+    const result = attachPayers([item("ค่าน้ำ")], { ค่าน้ำ: ["1", "2"] }, ["1", "2", "3"]);
+    expect(result[0]?.payerIds).toEqual(["1", "2"]);
+  });
+
+  it("บิลลอย ๆ ไม่มีรายชื่อตั้งต้น คนในบิลคือสหภาพของคนที่ถูกเอ่ยชื่อ", () => {
+    const result = attachPayers(
+      [item("ค่าข้าว"), item("ค่าน้ำ")],
+      { ค่าข้าว: ["1", "2"] },
+      [],
+    );
+
+    expect(result[0]?.payerIds).toEqual(["1", "2"]);
+    // ค่าน้ำไม่ได้ระบุใคร จึงเก็บทุกคนที่อยู่ในบิล
+    expect(result[1]?.payerIds).toEqual(["1", "2"]);
+  });
+
+  it("ไม่มีใครอยู่ในบิลเลย คิดไม่ได้", () => {
+    expect(errorCode(() => attachPayers([item("ค่าน้ำ")], {}, []))).toBe("NO_PLAYERS_TO_SPLIT");
   });
 });

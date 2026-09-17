@@ -1,4 +1,4 @@
-import { isAppError, type ErrorCode } from "@/errors/app-errors";
+import { AppError, isAppError, type ErrorCode } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
 import { endTime, formatThaiDate } from "@/lib/time";
 import {
@@ -8,7 +8,9 @@ import {
   confirmCloseGame,
   confirmCreateGame,
   confirmEditGame,
+  joinedForNotice,
   joinedNotice,
+  leftForNotice,
   leftNotice,
   NAG_AFTER_CHANGES,
   nagFlipFlop,
@@ -19,7 +21,7 @@ import {
 import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
 import { createPendingAction, updatePendingPayload } from "@/repositories/pending-action.repository";
 import { findPlayerStatus } from "@/repositories/player.repository";
-import type { UserRow } from "@/repositories/types";
+import type { LineUserRow } from "@/repositories/types";
 import {
   editPatchSchema,
   startCancelGame,
@@ -31,14 +33,17 @@ import {
   billDraftSchema,
   buildBillItems,
   getBill,
-  markMyPayment,
+  markPayment,
   startCreateBill,
   summarize,
   toBaht,
   totalOf,
   unpaidSharesForGame,
 } from "@/services/bill.service";
-import { joinGame, leaveGame, listPlayers } from "@/services/player.service";
+import { advanceBillWizard } from "@/router/wizard";
+import { joinGame, joinPeople, leaveGame, leavePeople, listPlayers } from "@/services/player.service";
+import { resolvePeople } from "@/services/people.service";
+import { upsertGuest } from "@/repositories/user.repository";
 import { isToolName, toolSchemas, type ToolName } from "./tools";
 
 export type ToolErrorCode = ErrorCode | "INVALID_ARGUMENT" | "INVALID_TOOL";
@@ -55,7 +60,7 @@ export type ToolOutcome = {
 
 export type ToolContext = {
   lineGroupId: string;
-  user: UserRow;
+  user: LineUserRow;
 };
 
 function ok(data: unknown, messages: LineMessage[] = []): ToolOutcome {
@@ -66,7 +71,7 @@ function fail(error: ToolErrorCode, extra: Record<string, unknown> = {}): ToolOu
   return { result: { ok: false, error, ...extra }, messages: [] };
 }
 
-async function describeOpenGame(lineGroupId: string, user: UserRow) {
+async function describeOpenGame(lineGroupId: string, user: LineUserRow) {
   const game = await findOpenGame(lineGroupId);
   if (!game) return null;
 
@@ -93,6 +98,53 @@ async function describeOpenGame(lineGroupId: string, user: UserRow) {
   };
 }
 
+/**
+ * ลงชื่อแทนคนอื่นผ่าน LLM (PRP guests-split-bills-and-digest §9)
+ * ชื่อที่ไม่รู้จักถือว่าเป็นแขกใหม่ เหมือนทางคำสั่งพิมพ์ทุกประการ
+ */
+async function runJoinFor(
+  lineGroupId: string,
+  user: LineUserRow,
+  names: string[],
+): Promise<[unknown, LineMessage[]]> {
+  const { people, unknown, ambiguous } = await resolvePeople(lineGroupId, names, user);
+  if (ambiguous.length > 0) throw new AppError("PERSON_AMBIGUOUS", { names: ambiguous });
+
+  const guests = await Promise.all(unknown.map((guest) => upsertGuest(lineGroupId, guest)));
+  const result = await joinPeople(lineGroupId, [...people, ...guests], user.id);
+
+  return [
+    {
+      joined: result.people.map((person) => person.display_name),
+      new_guests: guests.map((guest) => guest.display_name),
+      current_players: result.joinedCount,
+      max_players: result.game.max_players,
+    },
+    [joinedForNotice(user.display_name, result, guests.map((guest) => guest.display_name))],
+  ];
+}
+
+async function runLeaveFor(
+  lineGroupId: string,
+  user: LineUserRow,
+  names: string[],
+): Promise<[unknown, LineMessage[]]> {
+  const { people, unknown, ambiguous } = await resolvePeople(lineGroupId, names, user);
+  if (ambiguous.length > 0) throw new AppError("PERSON_AMBIGUOUS", { names: ambiguous });
+  if (people.length === 0) throw new AppError("PERSON_NOT_FOUND", { names: unknown });
+
+  const result = await leavePeople(lineGroupId, people, user.id);
+  return [
+    {
+      left: result.people.map((person) => person.display_name),
+      refused: result.skipped.map((entry) => entry.user.display_name),
+      current_players: result.joinedCount,
+      max_players: result.game.max_players,
+    },
+    [leftForNotice(user.display_name, result, unknown)],
+  ];
+}
+
 async function runTool(name: ToolName, args: Record<string, unknown>, context: ToolContext): Promise<ToolOutcome> {
   const { lineGroupId, user } = context;
 
@@ -115,6 +167,11 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
     }
 
     case "join_game": {
+      const names = (args.names as string[] | undefined) ?? [];
+      if (names.length > 0) {
+        return ok(...(await runJoinFor(lineGroupId, user, names)));
+      }
+
       const { game, joinedCount, changeCount } = await joinGame(lineGroupId, user.id);
       return ok({ current_players: joinedCount, max_players: game.max_players, changed_mind: changeCount }, [
         joinedNotice(user.display_name, joinedCount, game.max_players),
@@ -123,6 +180,11 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
     }
 
     case "leave_game": {
+      const names = (args.names as string[] | undefined) ?? [];
+      if (names.length > 0) {
+        return ok(...(await runLeaveFor(lineGroupId, user, names)));
+      }
+
       const { game, joinedCount, changeCount } = await leaveGame(lineGroupId, user.id);
       return ok({ current_players: joinedCount, max_players: game.max_players, changed_mind: changeCount }, [
         leftNotice(user.display_name, joinedCount, game.max_players),
@@ -190,56 +252,90 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
     }
 
     case "get_bill": {
-      const { game, bill, shares } = await getBill(lineGroupId);
+      const { bill, items: billItems, shares } = await getBill(
+        lineGroupId,
+        (args.bill_title as string | undefined) ?? "",
+      );
       const { paid, unpaid, unpaidTotalSatang, settled } = summarize(shares);
 
       return ok(
         {
-          items: bill.items.map((item) => ({
+          title: bill.title,
+          items: billItems.map((item) => ({
             label: item.label,
             quantity: item.quantity,
             amount_baht: toBaht(item.amount_satang),
+            payers: item.payers.map((payer) => payer.display_name),
           })),
           total_baht: toBaht(bill.total_satang),
-          per_person_baht: toBaht(shares[0]?.amount_satang ?? 0),
+          amounts: shares.map((share) => ({
+            name: share.display_name,
+            amount_baht: toBaht(share.amount_satang),
+            paid: share.paid,
+          })),
           paid: paid.map((share) => share.display_name),
           unpaid: unpaid.map((share) => share.display_name),
           unpaid_total_baht: toBaht(unpaidTotalSatang),
           settled,
           requester_paid: shares.find((share) => share.user_id === user.id)?.paid ?? null,
         },
-        [billCard(game, bill, shares)],
+        [billCard(bill, billItems, shares)],
       );
     }
 
     case "propose_create_bill": {
       const draft = billDraftSchema.parse(args);
+      const title = (args.title as string | undefined)?.trim() ?? "";
+
       // ตรวจสิทธิ์และเงื่อนไขก่อน จะได้ไม่สร้างการ์ดยืนยันที่กดไปก็ไม่ผ่าน
-      const { pending, game } = await startCreateBill(lineGroupId, user.id);
+      const { pending } = await startCreateBill(lineGroupId, user.id, title);
 
       const items = buildBillItems(draft);
-      const saved = await updatePendingPayload(pending.id, {
-        ...(draft as Record<string, never>),
+
+      // มาทาง LLM คือได้ข้อมูลครบในประโยคเดียว ช่องที่ไม่ได้บอกมาให้เป็น null
+      // (= ไม่มีรายการนี้) ไม่ใช่ undefined ซึ่งจะทำให้ wizard ย้อนไปถามใหม่
+      const preview = await advanceBillWizard(pending, {
+        court_fee: draft.court_fee ?? null,
+        shuttle_count: draft.shuttle_count ?? null,
+        shuttle_price: draft.shuttle_price ?? null,
+        ...(draft.other_items ? { other_items: draft.other_items } : {}),
         extras_done: true,
       });
-      if (!saved) return fail("PENDING_EXPIRED");
 
-      return ok({ status: "awaiting_confirmation", total_baht: toBaht(totalOf(items)) }, [
-        confirmBill(pending.id, game, items, totalOf(items), await countJoinedPlayers(game.id)),
-      ]);
+      return ok({ status: "awaiting_confirmation", total_baht: toBaht(totalOf(items)) }, preview);
     }
 
     case "mark_my_payment": {
       const paid = Boolean(args.paid);
-      const { shares, amountSatang } = await markMyPayment(lineGroupId, user.id, paid);
-      const { unpaid, settled } = summarize(shares);
+      const names = (args.names as string[] | undefined) ?? [];
+
+      const people =
+        names.length > 0
+          ? (await resolvePeople(lineGroupId, names, user)).people
+          : [user];
+      if (people.length === 0) return fail("PERSON_NOT_FOUND", { names });
+
+      const result = await markPayment(
+        lineGroupId,
+        user,
+        people,
+        paid,
+        (args.bill_title as string | undefined) ?? "",
+      );
+      const { unpaid, settled } = summarize(result.shares);
 
       return ok(
-        { paid, amount_baht: toBaht(amountSatang), unpaid_count: unpaid.length, settled },
+        {
+          paid,
+          recorded: result.people.map((entry) => entry.user.display_name),
+          refused: result.refused.map((entry) => entry.user.display_name),
+          unpaid_count: unpaid.length,
+          settled,
+        },
         [
           paid
-            ? paymentRecorded(user.display_name, amountSatang, shares)
-            : paymentUndone(user.display_name, shares),
+            ? paymentRecorded(user.display_name, result)
+            : paymentUndone(user.display_name, result),
         ],
       );
     }

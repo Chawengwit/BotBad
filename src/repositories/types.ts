@@ -8,11 +8,27 @@
  * - DATE → Date ซึ่งเพี้ยนได้เวลาแปลง timezone จึงต้อง cast เป็น text ใน query เสมอ
  */
 
+/**
+ * คนหนึ่งคนในระบบ เป็นได้สองแบบ (PRP guests-split-bills-and-digest §4.1)
+ *   สมาชิก LINE → line_user_id มีค่า, line_group_id เป็น null (คนเดียวอยู่ได้หลายกลุ่ม)
+ *   แขก        → line_user_id เป็น null, line_group_id มีค่า (ผูกกับกลุ่มที่พามา)
+ */
 export type UserRow = {
   id: string;
-  line_user_id: string;
+  line_user_id: string | null;
+  line_group_id: string | null;
   display_name: string;
 };
+
+export function isGuest(user: UserRow): boolean {
+  return user.line_user_id === null;
+}
+
+/**
+ * คนที่ส่ง event เข้ามา มี line_user_id เสมอ
+ * แขกเป็นได้แค่เป้าหมายของคำสั่ง สั่งงานเองไม่ได้เพราะไม่มี LINE อยู่ในกลุ่ม
+ */
+export type LineUserRow = UserRow & { line_user_id: string };
 
 export type GameStatus = "open" | "cancelled" | "completed";
 
@@ -50,11 +66,29 @@ export type BillItem = {
 
 export type BillRow = {
   id: string;
-  game_id: string;
+  line_group_id: string;
+  /** null = บิลลอย ๆ ไม่ผูกกับรอบตี (PRP guests-split-bills-and-digest §5) */
+  game_id: string | null;
   created_by: string;
+  /** ชื่อบิล ใช้อ้างถึงเมื่อกลุ่มมีบิลเปิดพร้อมกันหลายใบ */
+  title: string;
   status: BillStatus;
+  /** เลขพร้อมเพย์ของบิลนี้ คัดลอกมาตอนสร้าง จะได้ไม่เปลี่ยนตามการแก้รอบทีหลัง */
+  promptpay: string | null;
   items: BillItem[];
   total_satang: number;
+};
+
+/** รายการในบิล พร้อมรายชื่อคนร่วมจ่ายของรายการนั้น */
+export type BillItemRow = {
+  id: string;
+  bill_id: string;
+  position: number;
+  label: string;
+  quantity: number;
+  unit_price_satang: number;
+  amount_satang: number;
+  payers: { user_id: string; display_name: string; amount_satang: number }[];
 };
 
 export type BillShareRow = {
@@ -64,6 +98,9 @@ export type BillShareRow = {
   amount_satang: number;
   paid: boolean;
   display_name: string;
+  /** ใครเป็นคนบอกว่าจ่ายแล้ว null = เจ้าตัวบอกเอง */
+  paid_by: string | null;
+  paid_by_name: string | null;
 };
 
 export type PlayerStatus = "joined" | "cancelled";
@@ -74,4 +111,6 @@ export type GamePlayerRow = {
   user_id: string;
   status: PlayerStatus;
   display_name: string;
+  /** คนที่ลงชื่อให้ null = ลงเอง */
+  added_by: string | null;
 };

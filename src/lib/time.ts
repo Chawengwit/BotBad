@@ -61,11 +61,26 @@ export function endTime(startTime: string, durationMinutes: number): string {
   return `${endHour}:${endMinute}`;
 }
 
+/** 0 = อาทิตย์ ถึง 6 = เสาร์ คิดจากสตริงวันที่ล้วน ไม่ผ่าน timezone ของเครื่อง */
+export function weekdayOf(date: string): number {
+  const [year, month, day] = date.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+export const FRIDAY = 5;
+
+/**
+ * วันนี้เป็นวันศุกร์ตามเวลาไทยหรือเปล่า
+ * ต้องคิดจากวันที่ของไทย ไม่ใช่ของ UTC เพราะเที่ยงคืนไทยคือ 17:00 UTC ของวันก่อนหน้า
+ */
+export function isFridayInBangkok(now: Date = new Date()): boolean {
+  return weekdayOf(todayInBangkok(now)) === FRIDAY;
+}
+
 /** เช่น 2026-09-16 → "พุธ 16 ก.ย." */
 export function formatThaiDate(date: string): string {
-  const [year, month, day] = date.split("-").map(Number) as [number, number, number];
-  const weekday = THAI_WEEKDAYS[new Date(Date.UTC(year, month - 1, day)).getUTCDay()];
-  return `${weekday} ${day} ${THAI_MONTHS[month - 1]}`;
+  const [, month, day] = date.split("-").map(Number) as [number, number, number];
+  return `${THAI_WEEKDAYS[weekdayOf(date)]} ${day} ${THAI_MONTHS[month - 1]}`;
 }
 
 /** เช่น 19:00 + 120 นาที → "19:00 - 21:00" */

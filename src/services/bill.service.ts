@@ -3,11 +3,15 @@ import { AppError } from "@/errors/app-errors";
 import { getSql } from "@/lib/db";
 import {
   cancelBill as cancelBillRow,
-  findActiveBill,
-  findActiveBillByGame,
+  findActiveBillByTitle,
+  findBillById,
   insertBill,
+  listActiveBills,
+  listActiveBillsByGame,
+  listBillItems,
   listBillShares,
   markSharePaid,
+  type NewBillItem,
   type NewBillShare,
 } from "@/repositories/bill.repository";
 import { findGameById, findOpenGame } from "@/repositories/game.repository";
@@ -16,8 +20,10 @@ import {
   createPendingAction,
   type PendingActionRow,
 } from "@/repositories/pending-action.repository";
-import { listJoinedPlayers } from "@/repositories/player.repository";
-import type { BillItem, BillRow, BillShareRow, GameRow } from "@/repositories/types";
+import { findAddedBy, listJoinedPlayers } from "@/repositories/player.repository";
+import { formatThaiDate } from "@/lib/time";
+import { parseNames } from "./people.service";
+import type { BillItem, BillItemRow, BillRow, BillShareRow, GameRow, UserRow } from "@/repositories/types";
 
 /**
  * คิดเงินค่ารอบตี (docs/PRP/bill-splitting.md)
@@ -97,7 +103,7 @@ export function totalOf(items: BillItem[]): number {
 
 /**
  * หารเท่ากันทุกคน เศษสตางค์ตกที่คนคิดเงิน
- * ถ้าคนคิดเงินไม่ได้ลงชื่อเล่นด้วย เศษจะตกที่คนแรกที่ลงชื่อแทน
+ * ถ้าคนคิดเงินไม่ได้ร่วมจ่ายรายการนั้น เศษจะตกที่คนแรกของรายการแทน
  * (ไม่งั้นเศษจะไม่มีที่ไป และผลรวมของทุกคนจะไม่เท่ากับยอดบิล)
  */
 export function splitEqually(
@@ -117,9 +123,50 @@ export function splitEqually(
   }));
 }
 
+/**
+ * หารทีละรายการ ไม่ใช่หารยอดรวม (PRP guests-split-bills-and-digest §5.5)
+ *
+ * ยอดของคน X = ผลรวมของ (รายการ ÷ จำนวนคนร่วมจ่ายของรายการนั้น) ทุกรายการที่ X ร่วมจ่าย
+ * เศษของแต่ละรายการคิดแยกกัน จะได้ตรวจย้อนกลับได้ว่าเศษไปอยู่ที่ใครของรายการไหน
+ */
+export function splitByItem(
+  items: { item: BillItem; payerIds: string[] }[],
+  remainderTo: string,
+): { items: NewBillItem[]; shares: NewBillShare[]; totalSatang: number } {
+  if (items.length === 0) throw new AppError("AMOUNT_INVALID");
+
+  const perPerson = new Map<string, number>();
+  const built: NewBillItem[] = [];
+
+  for (const { item, payerIds } of items) {
+    if (payerIds.length === 0) throw new AppError("NO_PLAYERS_TO_SPLIT");
+
+    const payers = splitEqually(item.amount_satang, payerIds, remainderTo);
+    for (const payer of payers) {
+      perPerson.set(payer.userId, (perPerson.get(payer.userId) ?? 0) + payer.amountSatang);
+    }
+
+    built.push({
+      label: item.label,
+      quantity: item.quantity,
+      unitPriceSatang: item.unit_price_satang,
+      amountSatang: item.amount_satang,
+      payers,
+    });
+  }
+
+  return {
+    items: built,
+    shares: [...perPerson].map(([userId, amountSatang]) => ({ userId, amountSatang })),
+    totalSatang: built.reduce((sum, item) => sum + item.amountSatang, 0),
+  };
+}
+
 export type BillView = {
-  game: GameRow;
   bill: BillRow;
+  /** null = บิลลอย ๆ ที่ไม่ผูกกับรอบตี */
+  game: GameRow | null;
+  items: BillItemRow[];
   shares: BillShareRow[];
 };
 
@@ -153,28 +200,65 @@ async function requireBillableGame(lineGroupId: string, userId: string): Promise
   const game = await findOpenGame(lineGroupId);
   if (!game) throw new AppError("NO_OPEN_GAME");
   if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
-
-  if (await findActiveBillByGame(game.id)) throw new AppError("BILL_ALREADY_EXISTS");
   if ((await listJoinedPlayers(game.id)).length === 0) throw new AppError("NO_PLAYERS_TO_SPLIT");
 
   return game;
 }
 
-/** เริ่ม wizard คิดเงิน (PRP §7) */
+/** ชื่อบิลตั้งต้นของรอบตี ถ้าชนกับใบที่เปิดอยู่จะเติมลำดับต่อท้าย */
+async function defaultBillTitle(lineGroupId: string, game: GameRow): Promise<string> {
+  const base = `รอบ ${formatThaiDate(game.play_date)}`;
+  const taken = new Set((await listActiveBills(lineGroupId)).map((bill) => bill.title));
+
+  if (!taken.has(base)) return base;
+  for (let index = 2; index <= 20; index += 1) {
+    if (!taken.has(`${base} (${index})`)) return `${base} (${index})`;
+  }
+  throw new AppError("BILL_TITLE_TAKEN", { title: base });
+}
+
+/**
+ * เริ่ม wizard คิดเงิน (PRP guests-split-bills-and-digest §5)
+ *
+ * ระบุชื่อบิลมา = บิลลอย ๆ ที่ไม่ผูกกับรอบตี ใครในกลุ่มก็สร้างได้
+ * ไม่ระบุ = บิลของรอบที่เปิดอยู่ เฉพาะคนเปิดรอบเท่านั้น
+ */
 export async function startCreateBill(
   lineGroupId: string,
   userId: string,
-): Promise<{ pending: PendingActionRow; game: GameRow }> {
+  title = "",
+): Promise<{ pending: PendingActionRow; game: GameRow | null; title: string }> {
+  const wanted = title.trim();
+
+  if (wanted) {
+    if (await findActiveBillByTitle(lineGroupId, wanted)) {
+      throw new AppError("BILL_TITLE_TAKEN", { title: wanted });
+    }
+
+    return {
+      game: null,
+      title: wanted,
+      pending: await createPendingAction({
+        lineGroupId,
+        requestedBy: userId,
+        actionType: "create_bill",
+        payload: { title: wanted },
+      }),
+    };
+  }
+
   const game = await requireBillableGame(lineGroupId, userId);
+  const autoTitle = await defaultBillTitle(lineGroupId, game);
 
   return {
     game,
+    title: autoTitle,
     pending: await createPendingAction({
       lineGroupId,
       requestedBy: userId,
       actionType: "create_bill",
       gameId: game.id,
-      payload: {},
+      payload: { title: autoTitle },
     }),
   };
 }
@@ -191,16 +275,34 @@ export function parseAmount(text: string): number | null {
   return parsed.success ? parsed.data : null;
 }
 
-/** รายการอื่น ๆ พิมพ์มาบรรทัดเดียว เช่น "ค่าเช่าไม้ 100" */
-export function parseOtherItem(text: string): { label: string; amount: number } | null {
-  const match = text.trim().match(/^(.*?)[\s:]*([\d.,]+)\s*(?:บาท)?$/);
+export type ParsedItemLine = { label: string; amount: number; payerNames: string[] };
+
+/**
+ * รายการพิมพ์มาบรรทัดเดียว `<ชื่อรายการ> <จำนวนเงิน> [ชื่อคน ...]`
+ * (PRP guests-split-bills-and-digest §5.3)
+ *
+ *   ค่าเช่าไม้ 100              → เก็บทุกคนในบิล
+ *   ค่าน้ำ 60 เชวง แบงค์        → เก็บสองคนนี้
+ *
+ * จำนวนเงินเป็นตัวคั่นระหว่างชื่อรายการกับรายชื่อคน จึงไม่ต้องเดาว่าคำไหนเป็นชื่อใคร
+ */
+export function parseItemLine(text: string): ParsedItemLine | null {
+  const match = text.trim().match(/^(.*?)[\s:]*([\d.,]+)\s*(?:บาท)?(?:\s+(.*))?$/u);
   if (!match) return null;
 
   const amount = parseAmount(match[2] ?? "");
   if (amount === null) return null;
 
   const parsed = otherItemSchema.safeParse({ label: match[1] ?? "", amount });
-  return parsed.success ? parsed.data : null;
+  if (!parsed.success) return null;
+
+  return { ...parsed.data, payerNames: parseNames(match[3] ?? "") };
+}
+
+/** รายการอื่น ๆ แบบไม่สนใจว่าใครร่วมจ่าย ใช้ในที่ที่ยังไม่รองรับการเลือกคน */
+export function parseOtherItem(text: string): { label: string; amount: number } | null {
+  const parsed = parseItemLine(text);
+  return parsed ? { label: parsed.label, amount: parsed.amount } : null;
 }
 
 /** แปลง payload ที่ wizard สะสมไว้เป็นร่างบิล */
@@ -218,7 +320,7 @@ export function draftFromPayload(payload: Record<string, unknown>): BillDraft {
 }
 
 /**
- * ยืนยันส่งบิล ทำในทรานแซกชันเดียว: ใช้ pending action + สร้างบิล + ตัดยอดของทุกคน
+ * ยืนยันส่งบิล ทำในทรานแซกชันเดียว: ใช้ pending action + สร้างบิล + รายการ + ยอดของทุกคน
  * ถ้าล้มกลางทางต้องไม่เหลือบิลที่ไม่มียอดของใครเลย
  */
 export async function confirmCreateBill(
@@ -231,34 +333,111 @@ export async function confirmCreateBill(
     if (!pending || pending.action_type !== "create_bill") throw new AppError("PENDING_EXPIRED");
     if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
 
-    const game = await findOpenGame(lineGroupId, tx);
-    if (!game) throw new AppError("NO_OPEN_GAME");
-    // การ์ดใบนี้ออกไว้กับรอบไหน ต้องคิดเงินให้รอบนั้นเท่านั้น
-    if (pending.game_id && pending.game_id !== game.id) throw new AppError("PENDING_EXPIRED");
-    if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
-    if (await findActiveBillByGame(game.id, tx)) throw new AppError("BILL_ALREADY_EXISTS");
+    const title = String(pending.payload.title ?? "").trim();
+    if (!title) throw new AppError("PENDING_EXPIRED");
+    if (await findActiveBillByTitle(lineGroupId, title, tx)) {
+      throw new AppError("BILL_TITLE_TAKEN", { title });
+    }
 
-    const players = await listJoinedPlayers(game.id, tx);
-    if (players.length === 0) throw new AppError("NO_PLAYERS_TO_SPLIT");
+    const game = pending.game_id ? await findGameById(pending.game_id, tx) : null;
+    if (pending.game_id && !game) throw new AppError("PENDING_EXPIRED");
+    if (game && game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
 
-    const items = buildBillItems(draftFromPayload(pending.payload));
-    const totalSatang = totalOf(items);
-    const shares = splitEqually(
-      totalSatang,
-      players.map((player) => player.user_id),
-      userId,
-    );
+    // คนที่อยู่ในบิลตั้งต้น: รอบตีใช้คนที่ลงชื่อ ส่วนบิลลอย ๆ ใช้คนที่ถูกเอ่ยชื่อในรายการ
+    const defaultPayerIds = game
+      ? (await listJoinedPlayers(game.id, tx)).map((player) => player.user_id)
+      : [];
 
+    const draft = draftFromPayload(pending.payload);
+    const items = buildBillItems(draft);
+    const payersByLabel = (pending.payload.item_payers ?? {}) as Record<string, string[]>;
+    const withPayers = attachPayers(items, payersByLabel, defaultPayerIds);
+
+    const split = splitByItem(withPayers, userId);
     const bill = await insertBill(
-      { gameId: game.id, createdBy: userId, items, totalSatang, shares },
+      {
+        lineGroupId,
+        gameId: game?.id ?? null,
+        createdBy: userId,
+        title,
+        promptpay: (pending.payload.promptpay as string | undefined) ?? game?.promptpay ?? null,
+        items: split.items,
+        totalSatang: split.totalSatang,
+        shares: split.shares,
+      },
       tx,
     );
 
     return { game, bill };
   });
 
-  const { game, bill } = created as { game: GameRow; bill: BillRow };
-  return { game, bill, shares: await listBillShares(bill.id) };
+  const { game, bill } = created as { game: GameRow | null; bill: BillRow };
+  return {
+    game,
+    bill,
+    items: await listBillItems(bill.id),
+    shares: await listBillShares(bill.id),
+  };
+}
+
+/**
+ * ผูกคนร่วมจ่ายเข้ากับแต่ละรายการ
+ * รายการที่ไม่ได้ระบุชื่อใครไว้ = เก็บทุกคนในบิล
+ * บิลลอย ๆ ไม่มีรอบให้ดึงรายชื่อ คนในบิลจึงเป็นสหภาพของทุกคนที่ถูกเอ่ยชื่อในรายการ
+ */
+export function attachPayers(
+  items: BillItem[],
+  payersByLabel: Record<string, string[]>,
+  defaultPayerIds: string[],
+): { item: BillItem; payerIds: string[] }[] {
+  const everyone =
+    defaultPayerIds.length > 0
+      ? defaultPayerIds
+      : [...new Set(Object.values(payersByLabel).flat())];
+
+  return items.map((item) => {
+    const chosen = payersByLabel[item.label];
+    const payerIds = chosen && chosen.length > 0 ? chosen : everyone;
+    if (payerIds.length === 0) throw new AppError("NO_PLAYERS_TO_SPLIT");
+    return { item, payerIds };
+  });
+}
+
+/**
+ * เลือกบิลที่คำสั่งนี้หมายถึง (PRP guests-split-bills-and-digest §5.2)
+ * กลุ่มมีบิลเปิดพร้อมกันได้หลายใบ ไม่ระบุชื่อตอนมีหลายใบจึงต้องถามกลับ
+ */
+export async function resolveBill(lineGroupId: string, title = ""): Promise<BillRow> {
+  const wanted = title.trim();
+
+  if (wanted) {
+    const found = await findActiveBillByTitle(lineGroupId, wanted);
+    if (!found) throw new AppError("NO_BILL", { title: wanted });
+    return found;
+  }
+
+  const bills = await listActiveBills(lineGroupId);
+  if (bills.length === 0) throw new AppError("NO_BILL");
+  if (bills.length > 1) {
+    throw new AppError("BILL_AMBIGUOUS", { titles: bills.map((bill) => bill.title) });
+  }
+  return bills[0]!;
+}
+
+/**
+ * บิลพร้อมรายการและยอดของทุกคน
+ * อ่านรอบจาก game_id ของบิลโดยตรง เพราะรอบอาจปิดไปแล้วแต่ยังตามเก็บเงินกันอยู่
+ * บิลลอย ๆ ไม่มีรอบเลย ซึ่งไม่ใช่ error
+ */
+export async function getBill(lineGroupId: string, title = ""): Promise<BillView> {
+  const bill = await resolveBill(lineGroupId, title);
+
+  return {
+    bill,
+    game: bill.game_id ? await findGameById(bill.game_id) : null,
+    items: await listBillItems(bill.id),
+    shares: await listBillShares(bill.id),
+  };
 }
 
 /** สรุปบิลสั้น ๆ สำหรับใส่ใน system prompt คืน null เมื่อกลุ่มยังไม่มีบิล */
@@ -266,42 +445,50 @@ export async function findBillContext(
   lineGroupId: string,
   userId: string,
 ): Promise<{
-  perPersonBaht: number;
+  title: string;
+  openBillCount: number;
+  myAmountBaht: number | null;
   unpaidCount: number;
   settled: boolean;
   requesterPaid: boolean | null;
 } | null> {
-  const bill = await findActiveBill(lineGroupId);
+  const bills = await listActiveBills(lineGroupId);
+  const bill = bills[0];
   if (!bill) return null;
 
   const shares = await listBillShares(bill.id);
   const { unpaid, settled } = summarize(shares);
+  const mine = shares.find((share) => share.user_id === userId);
 
   return {
-    perPersonBaht: toBaht(shares[0]?.amount_satang ?? 0),
+    title: bill.title,
+    openBillCount: bills.length,
+    myAmountBaht: mine ? toBaht(mine.amount_satang) : null,
     unpaidCount: unpaid.length,
     settled,
-    requesterPaid: shares.find((share) => share.user_id === userId)?.paid ?? null,
+    requesterPaid: mine?.paid ?? null,
   };
 }
 
 /**
  * คนที่ยังไม่จ่ายของรอบนั้น ใช้เตือนตอนปิดรอบหรือยกเลิกรอบ
- * ไม่มีบิลก็ไม่มีอะไรต้องเตือน ก๊วนที่ไม่ใช้ฟีเจอร์คิดเงินต้องไม่รู้สึกอะไรเลย (PRP §5.7)
+ * รอบหนึ่งมีบิลได้หลายใบแล้ว จึงรวมคนค้างของทุกใบ
+ * ไม่มีบิลก็ไม่มีอะไรต้องเตือน ก๊วนที่ไม่ใช้ฟีเจอร์คิดเงินต้องไม่รู้สึกอะไรเลย
  */
 export async function unpaidSharesForGame(gameId: string): Promise<BillShareRow[]> {
-  const bill = await findActiveBillByGame(gameId);
-  if (!bill) return [];
+  const bills = await listActiveBillsByGame(gameId);
+  const perBill = await Promise.all(bills.map((bill) => listBillShares(bill.id)));
 
-  return (await listBillShares(bill.id)).filter((share) => !share.paid);
+  return perBill.flat().filter((share) => !share.paid);
 }
 
-/** ขอยกเลิกบิล เฉพาะคนที่คิดเงิน (= คนเปิดรอบ) */
+/** ขอยกเลิกบิล เฉพาะคนที่สร้างบิลใบนั้น */
 export async function startCancelBill(
   lineGroupId: string,
   userId: string,
+  title = "",
 ): Promise<{ pending: PendingActionRow; view: BillView }> {
-  const view = await getBill(lineGroupId);
+  const view = await getBill(lineGroupId, title);
   if (view.bill.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
 
   return {
@@ -326,50 +513,65 @@ export async function confirmCancelBill(
     if (!pending || pending.action_type !== "cancel_bill") throw new AppError("PENDING_EXPIRED");
     if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
 
-    const bill = await findActiveBill(lineGroupId, tx);
-    if (!bill || bill.id !== pending.payload.bill_id) throw new AppError("NO_BILL");
+    const billId = String(pending.payload.bill_id ?? "");
+    const bill = await findBillById(billId, tx);
+    if (!bill || bill.status !== "sent" || bill.line_group_id !== lineGroupId) {
+      throw new AppError("NO_BILL");
+    }
     if (bill.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
 
     await cancelBillRow(bill.id, tx);
   });
 }
 
-/**
- * บิลที่ยังใช้งานอยู่ของกลุ่ม พร้อมยอดของทุกคน
- * อ่านรอบจาก game_id ของบิลโดยตรง เพราะรอบอาจปิดไปแล้วแต่ยังตามเก็บเงินกันอยู่ (PRP §5.4)
- */
-export async function getBill(lineGroupId: string): Promise<BillView> {
-  const bill = await findActiveBill(lineGroupId);
-  if (!bill) throw new AppError("NO_BILL");
-
-  const game = await findGameById(bill.game_id);
-  if (!game) throw new AppError("NO_BILL");
-
-  return { game, bill, shares: await listBillShares(bill.id) };
-}
+export type PaymentResult = {
+  bill: BillRow;
+  shares: BillShareRow[];
+  /** คนที่บันทึกสำเร็จ */
+  people: { user: UserRow; amountSatang: number }[];
+  /** คนที่ทำไม่ได้ เพราะไม่อยู่ในบิลหรือไม่มีสิทธิ์กดแทน */
+  refused: { user: UserRow; reason: "not_in_bill" | "not_allowed" }[];
+};
 
 /**
- * บอกว่าตัวเองจ่ายแล้วหรือยัง
- * บอทเชื่อคำพูดของคนจ่าย ไม่มีขั้นให้ใครมายืนยันอีกที (PRP §4.2)
+ * บันทึกว่าจ่ายแล้วหรือยัง ของตัวเองหรือของคนอื่นก็ได้ (PRP §5.6)
+ *
+ * กดแทนได้เมื่อเป็นเจ้าตัว เป็นคนที่พาคนนั้นมาในรอบของบิลนี้ หรือเป็นคนสร้างบิล
+ * คนสร้างบิลได้สิทธิ์เพราะเป็นคนรับโอน มีคนจ่ายเงินสดให้ตรง ๆ ได้
+ * บอทเชื่อคำพูดของคนจ่าย ไม่มีขั้นให้ใครมายืนยันอีกที
  */
-export async function markMyPayment(
+export async function markPayment(
   lineGroupId: string,
-  userId: string,
+  actor: UserRow,
+  people: UserRow[],
   paid: boolean,
-): Promise<{ bill: BillRow; shares: BillShareRow[]; amountSatang: number; changed: boolean }> {
-  const bill = await findActiveBill(lineGroupId);
-  if (!bill) throw new AppError("NO_BILL");
+  title = "",
+): Promise<PaymentResult> {
+  const bill = await resolveBill(lineGroupId, title);
+  const before = await listBillShares(bill.id);
+  const result: PaymentResult = { bill, shares: before, people: [], refused: [] };
 
-  const shares = await listBillShares(bill.id);
-  const mine = shares.find((share) => share.user_id === userId);
-  if (!mine) throw new AppError("NOT_IN_BILL");
+  for (const person of people) {
+    const share = before.find((row) => row.user_id === person.id);
+    if (!share) {
+      result.refused.push({ user: person, reason: "not_in_bill" });
+      continue;
+    }
 
-  const changed = await markSharePaid(bill.id, userId, paid);
+    const isSelf = person.id === actor.id;
+    const isBillOwner = bill.created_by === actor.id;
+    const broughtThem =
+      bill.game_id !== null && (await findAddedBy(bill.game_id, person.id)) === actor.id;
 
-  return {
-    bill,
-    shares: changed ? await listBillShares(bill.id) : shares,
-    amountSatang: mine.amount_satang,
-    changed,
-  };
+    if (!isSelf && !isBillOwner && !broughtThem) {
+      result.refused.push({ user: person, reason: "not_allowed" });
+      continue;
+    }
+
+    await markSharePaid(bill.id, person.id, paid, paid ? actor.id : null);
+    result.people.push({ user: person, amountSatang: share.amount_satang });
+  }
+
+  result.shares = result.people.length > 0 ? await listBillShares(bill.id) : before;
+  return result;
 }

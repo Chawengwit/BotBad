@@ -42,6 +42,19 @@ export async function findPlayerStatus(
   return rows[0]?.status ?? null;
 }
 
+/** ใครเป็นคนลงชื่อให้คนนี้ null = ลงเอง หรือยังไม่เคยลง */
+export async function findAddedBy(
+  gameId: string,
+  userId: string,
+  sql: Queryable = getSql(),
+): Promise<string | null> {
+  const rows = await sql<{ added_by: string | null }[]>`
+    SELECT added_by FROM game_players
+    WHERE game_id = ${gameId} AND user_id = ${userId}
+  `;
+  return rows[0]?.added_by ?? null;
+}
+
 /**
  * ลงชื่อ หรือกลับเข้ามาใหม่หลังเคยถอนชื่อ
  * คืนจำนวนครั้งที่คนนี้เปลี่ยนใจในรอบนี้ (ลงครั้งแรกคือ 0)
@@ -50,13 +63,16 @@ export async function joinPlayer(
   gameId: string,
   userId: string,
   sql: Queryable,
+  addedBy: string | null = null,
 ): Promise<number> {
   const rows = await sql<{ change_count: number }[]>`
-    INSERT INTO game_players (game_id, user_id, status)
-    VALUES (${gameId}, ${userId}, 'joined')
+    INSERT INTO game_players (game_id, user_id, status, added_by)
+    VALUES (${gameId}, ${userId}, 'joined', ${addedBy})
     ON CONFLICT (game_id, user_id) DO UPDATE
       SET status = 'joined',
           joined_at = now(),
+          -- ลงกลับเข้ามาใหม่โดยคนละคน ให้คนล่าสุดเป็นเจ้าของสิทธิ์ถอน
+          added_by = ${addedBy},
           change_count = game_players.change_count + 1,
           updated_at = now()
     RETURNING change_count
@@ -86,7 +102,7 @@ export async function listJoinedPlayers(
   sql: Queryable = getSql(),
 ): Promise<GamePlayerRow[]> {
   return sql<GamePlayerRow[]>`
-    SELECT gp.id, gp.game_id, gp.user_id, gp.status, u.display_name
+    SELECT gp.id, gp.game_id, gp.user_id, gp.status, gp.added_by, u.display_name
     FROM game_players gp
     JOIN users u ON u.id = gp.user_id
     WHERE gp.game_id = ${gameId} AND gp.status = 'joined'

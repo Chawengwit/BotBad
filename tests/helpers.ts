@@ -163,3 +163,58 @@ export function hasButtons(message: unknown): boolean {
   if (any.quickReply !== undefined) return true;
   return flexParts(any).some((node) => node.type === "button");
 }
+
+/** ตัวอย่างข้อมูลบิลที่หลายชุดเทสใช้ร่วมกัน (PRP guests-split-bills-and-digest §5) */
+
+export function makeBill(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "1",
+    line_group_id: "C123",
+    game_id: "1" as string | null,
+    created_by: "1",
+    title: "รอบ พุธ 16 ก.ย.",
+    status: "sent" as const,
+    promptpay: "0812345678" as string | null,
+    items: [],
+    total_satang: 70000,
+    ...overrides,
+  };
+}
+
+export function makeShare(
+  id: string,
+  name: string,
+  paid: boolean,
+  amountSatang = 35000,
+  paidByName: string | null = null,
+) {
+  return {
+    id,
+    bill_id: "1",
+    user_id: id,
+    amount_satang: amountSatang,
+    paid,
+    display_name: name,
+    paid_by: paidByName ? "1" : null,
+    paid_by_name: paidByName,
+  };
+}
+
+export function makeItem(
+  position: number,
+  label: string,
+  amountSatang: number,
+  payers: { user_id: string; display_name: string; amount_satang: number }[],
+  quantity = 1,
+) {
+  return {
+    id: String(position),
+    bill_id: "1",
+    position,
+    label,
+    quantity,
+    unit_price_satang: quantity > 1 ? amountSatang / quantity : amountSatang,
+    amount_satang: amountSatang,
+    payers,
+  };
+}

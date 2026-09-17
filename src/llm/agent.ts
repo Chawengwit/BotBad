@@ -11,7 +11,7 @@ import {
   saveSessionMessages,
   type SessionMessage,
 } from "@/repositories/session.repository";
-import type { UserRow } from "@/repositories/types";
+import type { LineUserRow } from "@/repositories/types";
 import { findBillContext } from "@/services/bill.service";
 import { buildSystemPrompt, isIgnoreReply } from "./system-prompt";
 import { executeTool, type ToolContext } from "./tool-executor";
@@ -31,7 +31,7 @@ export type AgentInput = {
   text: string;
   lineGroupId: string;
   lineUserId: string;
-  user: UserRow;
+  user: LineUserRow;
   client: GeminiClient;
   now?: Date;
   /** ข้อความนี้มาทางโหมดฟัง ไม่ได้ขึ้นต้นด้วย wake word (spec §6) */
@@ -54,7 +54,7 @@ function toContents(history: SessionMessage[], userText: string): Content[] {
   ];
 }
 
-async function buildGameContext(lineGroupId: string, user: UserRow) {
+async function buildGameContext(lineGroupId: string, user: LineUserRow) {
   const game = await findOpenGame(lineGroupId);
   if (!game) return null;
 

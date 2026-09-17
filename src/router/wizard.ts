@@ -20,7 +20,13 @@ import {
   confirmEditGame,
 } from "@/line/messages";
 import { findLastShuttlePrice } from "@/repositories/bill.repository";
-import { buildBillItems, draftFromPayload, totalOf } from "@/services/bill.service";
+import {
+  attachPayers,
+  buildBillItems,
+  draftFromPayload,
+  splitByItem,
+} from "@/services/bill.service";
+import { listJoinedPlayers } from "@/repositories/player.repository";
 import {
   countJoinedPlayers,
   findGameById,
@@ -183,13 +189,71 @@ export async function advanceBillWizard(
 
   await save(pending.id, { ...patch, awaiting: null });
 
-  const game = await findGameById(String(pending.game_id));
-  if (!game) throw new AppError("NO_OPEN_GAME");
+  return [await previewBill(pending, payload)];
+}
+
+/**
+ * การ์ดยืนยันบิล ต้องคิดยอดรายคนให้ดูก่อนกดส่ง เพราะแต่ละคนไม่เท่ากันแล้ว
+ * ใช้สูตรเดียวกับตอนสร้างจริง จะได้ไม่มีทางที่ตัวเลขบนการ์ดกับในฐานข้อมูลต่างกัน
+ */
+async function previewBill(
+  pending: PendingActionRow,
+  payload: PendingPayload,
+): Promise<LineMessage> {
+  const title = String(payload.title ?? "บิล");
+  const game = pending.game_id ? await findGameById(pending.game_id) : null;
+
+  const defaultPayers = game
+    ? (await listJoinedPlayers(game.id)).map((player) => ({
+        user_id: player.user_id,
+        display_name: player.display_name,
+      }))
+    : [];
+
+  const chosen = (payload.item_payers ?? {}) as Record<string, string[]>;
+  const nameOf = new Map<string, string>([
+    ...defaultPayers.map((payer) => [payer.user_id, payer.display_name] as const),
+    ...Object.entries((payload.payer_names ?? {}) as Record<string, string>),
+  ]);
 
   const items = buildBillItems(draftFromPayload(payload));
-  return [
-    confirmBill(pending.id, game, items, totalOf(items), await countJoinedPlayers(game.id)),
-  ];
+  const withPayers = attachPayers(
+    items,
+    chosen,
+    defaultPayers.map((payer) => payer.user_id),
+  );
+
+  const split = splitByItem(withPayers, pending.requested_by);
+
+  return confirmBill(
+    pending.id,
+    title,
+    split.items.map((item, index) => ({
+      id: String(index),
+      bill_id: pending.id,
+      position: index,
+      label: item.label,
+      quantity: item.quantity,
+      unit_price_satang: item.unitPriceSatang,
+      amount_satang: item.amountSatang,
+      payers: item.payers.map((payer) => ({
+        user_id: payer.userId,
+        display_name: nameOf.get(payer.userId) ?? "แขก",
+        amount_satang: payer.amountSatang,
+      })),
+    })),
+    split.totalSatang,
+    split.shares.map((share) => ({
+      id: share.userId,
+      bill_id: pending.id,
+      user_id: share.userId,
+      amount_satang: share.amountSatang,
+      paid: false,
+      display_name: nameOf.get(share.userId) ?? "แขก",
+      paid_by: null,
+      paid_by_name: null,
+    })),
+  );
 }
 
 /** แก้ไขทีละช่อง เลือกค่าเสร็จก็ไปการ์ดยืนยันเลย */

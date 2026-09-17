@@ -80,6 +80,7 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
     await sql`DELETE FROM games WHERE line_group_id = ${GROUP_ID}`;
     if (lineUserIds.length > 0) {
       await sql`DELETE FROM users WHERE line_user_id = ANY(${lineUserIds})`;
+      await sql`DELETE FROM users WHERE line_group_id = ${GROUP_ID}`;
       lineUserIds.length = 0;
     }
   }

@@ -15,8 +15,8 @@ import { isSmallTalk, isStopWord } from "@/router/listening";
 import { handlePostback, parsePostbackData, type PostbackData } from "@/router/postback";
 import {
   handleRuleCommand,
-  isRuleCommand,
   keepsConversationOpen,
+  parseCommand,
   stripWakeWord,
 } from "@/router/rule-commands";
 import { handleTextAnswer } from "@/router/text-answer";
@@ -140,15 +140,21 @@ async function resolveMessages(
       return [goodbye()];
     }
 
-    if (isRuleCommand(command)) {
+    const parsed = parseCommand(command);
+    if (parsed) {
       return runOrExplain(async () => {
         const user = await ensureUser(groupId, userId, context.accessToken);
         // ใช้คำสั่งตรงตัวแล้ว ถือว่าจบเรื่องเดิม ล้างบริบทที่คุยค้างไว้
         await clearSession(groupId, userId).catch(() => {});
-        const messages = await handleRuleCommand({ command, lineGroupId: groupId, user });
+        const messages = await handleRuleCommand({
+          command: parsed.command,
+          args: parsed.args,
+          lineGroupId: groupId,
+          user,
+        });
 
         // คำสั่งที่ตอบมาเป็นคำถามหรือการ์ดยืนยัน = ยังคุยกันไม่จบ ฟังต่อได้เลย
-        const keepListening = gemini !== null && keepsConversationOpen(command);
+        const keepListening = gemini !== null && keepsConversationOpen(parsed.command);
         await setListeningWindow(groupId, userId, keepListening).catch(() => {});
         return messages;
       }, context.accessToken);

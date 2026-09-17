@@ -6,7 +6,7 @@ import {
   editMenu,
   helpMenu,
 } from "@/line/messages";
-import type { UserRow } from "@/repositories/types";
+import type { LineUserRow } from "@/repositories/types";
 import { startCancelGame, startCloseGame, startEditGame } from "@/services/game-admin.service";
 import { startCreateGame } from "@/services/game.service";
 import { unpaidSharesForGame } from "@/services/bill.service";
@@ -17,7 +17,7 @@ import {
   doStartBill,
   doUnpaidList,
 } from "./bill-actions";
-import { doJoin, doLeave, doList } from "./game-actions";
+import { doJoin, doJoinFor, doLeave, doLeaveFor, doList } from "./game-actions";
 import { WAKE_WORD } from "./wake-word";
 
 /** คำสั่งที่ทำงานได้แล้ว ส่วนที่เหลือรอขั้นตอนถัดไปของ spec §29 */
@@ -57,9 +57,50 @@ const OPEN_ENDED_COMMANDS: readonly RuleCommand[] = [
   "ยกเลิกบิล",
 ];
 
+/**
+ * คำสั่งที่รับรายชื่อหรือชื่อบิลต่อท้ายได้ (PRP guests-split-bills-and-digest §8.1)
+ *
+ * ของเดิมเทียบแบบตรงทั้งข้อความ (spec §18) ซึ่งใช้กับ "ลงชื่อ กิ้ฟ วิท" ไม่ได้
+ * คำสั่งในรายการนี้จึงเทียบแบบ "ขึ้นต้นด้วย" แล้วเก็บที่เหลือเป็นส่วนเติม
+ * ไม่มีส่วนเติม = พฤติกรรมเดิมทุกประการ
+ */
+const COMMANDS_WITH_ARGS: readonly RuleCommand[] = [
+  "ลงชื่อ",
+  "ถอนชื่อ",
+  "จ่ายแล้ว",
+  "ยังไม่จ่าย",
+  "คิดเงิน",
+  "บิล",
+  "ใครยังไม่จ่าย",
+  "ยกเลิกบิล",
+];
+
+export type ParsedCommand = { command: RuleCommand; args: string };
+
 /** เช็กก่อนแตะฐานข้อมูลหรือเรียก LINE API จะได้ไม่เปลืองกับข้อความที่ยังไม่รองรับ */
 export function isRuleCommand(command: string): command is RuleCommand {
   return (RULE_COMMANDS as readonly string[]).includes(command);
+}
+
+/**
+ * แยกข้อความหลัง wake word ออกเป็นคำสั่งกับส่วนเติมท้าย
+ * คืน null เมื่อไม่ตรงคำสั่งไหนเลย ให้ผู้เรียกส่งต่อให้ LLM
+ */
+export function parseCommand(text: string): ParsedCommand | null {
+  const trimmed = text.trim();
+  if (isRuleCommand(trimmed)) return { command: trimmed, args: "" };
+
+  for (const command of COMMANDS_WITH_ARGS) {
+    if (!trimmed.startsWith(command)) continue;
+
+    const args = trimmed.slice(command.length).trim();
+    // ต้องมีตัวคั่นจริง ๆ ไม่ใช่คำอื่นที่บังเอิญขึ้นต้นเหมือนกัน
+    if (args.length > 0 && trimmed[command.length] !== undefined && /^[\s,]/u.test(trimmed[command.length]!)) {
+      return { command, args };
+    }
+  }
+
+  return null;
 }
 
 /** คำสั่งนี้เปิดเรื่องค้างไว้ไหม ถ้าใช่แปลว่ายังคุยกันไม่จบ */
@@ -75,9 +116,13 @@ export function stripWakeWord(text: string): string {
 
 export async function handleRuleCommand(input: {
   command: RuleCommand;
+  /** ส่วนเติมท้ายคำสั่ง เช่นรายชื่อคน ว่างแปลว่าทำกับตัวเอง */
+  args?: string;
   lineGroupId: string;
-  user: UserRow;
+  user: LineUserRow;
 }): Promise<LineMessage[]> {
+  const args = input.args?.trim() ?? "";
+
   switch (input.command) {
     case "เมนู":
     case "ช่วยด้วย":
@@ -87,9 +132,13 @@ export async function handleRuleCommand(input: {
       return [askCourtCount(pending.id)];
     }
     case "ลงชื่อ":
-      return doJoin(input.lineGroupId, input.user);
+      return args
+        ? doJoinFor(input.lineGroupId, input.user, args)
+        : doJoin(input.lineGroupId, input.user);
     case "ถอนชื่อ":
-      return doLeave(input.lineGroupId, input.user);
+      return args
+        ? doLeaveFor(input.lineGroupId, input.user, args)
+        : doLeave(input.lineGroupId, input.user);
     case "ใครตีบ้าง":
     case "รายชื่อ":
       return doList(input.lineGroupId);
@@ -106,16 +155,16 @@ export async function handleRuleCommand(input: {
       return [confirmCloseGame(pending.id, game, joinedCount, await unpaidSharesForGame(game.id))];
     }
     case "คิดเงิน":
-      return doStartBill(input.lineGroupId, input.user);
+      return doStartBill(input.lineGroupId, input.user, args);
     case "บิล":
-      return doShowBill(input.lineGroupId);
+      return doShowBill(input.lineGroupId, args);
     case "ใครยังไม่จ่าย":
-      return doUnpaidList(input.lineGroupId);
+      return doUnpaidList(input.lineGroupId, args);
     case "จ่ายแล้ว":
-      return doMarkPayment(input.lineGroupId, input.user, true);
+      return doMarkPayment(input.lineGroupId, input.user, true, args);
     case "ยังไม่จ่าย":
-      return doMarkPayment(input.lineGroupId, input.user, false);
+      return doMarkPayment(input.lineGroupId, input.user, false, args);
     case "ยกเลิกบิล":
-      return doCancelBill(input.lineGroupId, input.user);
+      return doCancelBill(input.lineGroupId, input.user, args);
   }
 }

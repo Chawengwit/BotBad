@@ -22,7 +22,7 @@ import {
   type PendingActionRow,
 } from "@/repositories/pending-action.repository";
 import { clearSession } from "@/repositories/session.repository";
-import type { UserRow } from "@/repositories/types";
+import type { LineUserRow } from "@/repositories/types";
 import { applyCancelGame, applyCloseGame, applyEditGame } from "@/services/game-admin.service";
 import {
   confirmCreateGame as confirmCreateGameService,
@@ -150,7 +150,7 @@ const EDIT_FIELD_QUESTIONS = {
 async function handleConfirm(
   pending: PendingActionRow,
   lineGroupId: string,
-  user: UserRow,
+  user: LineUserRow,
 ): Promise<LineMessage[]> {
   const userId = user.id;
   const messages = await runConfirm(pending, lineGroupId, userId);
@@ -187,8 +187,8 @@ async function runConfirm(
       return [gameClosed(await unpaidSharesForGame(game.id))];
     }
     case "create_bill": {
-      const { game, bill, shares } = await confirmCreateBill(pending.id, lineGroupId, userId);
-      return [billCard(game, bill, shares, "💰 คิดเงินแล้ว")];
+      const { bill, items, shares } = await confirmCreateBill(pending.id, lineGroupId, userId);
+      return [billCard(bill, items, shares, "💰 คิดเงินแล้ว")];
     }
     case "cancel_bill": {
       await confirmCancelBill(pending.id, lineGroupId, userId);
@@ -276,7 +276,7 @@ export async function handlePostback(
   input: {
     params: PostbackParams;
     lineGroupId: string;
-    user: UserRow;
+    user: LineUserRow;
   },
 ): Promise<LineMessage[]> {
   const userId = input.user.id;

@@ -1,6 +1,6 @@
 import { getGroupMemberDisplayName } from "@/lib/line";
 import { upsertUser } from "@/repositories/user.repository";
-import type { UserRow } from "@/repositories/types";
+import type { LineUserRow } from "@/repositories/types";
 
 /** ใช้เมื่อ LINE ไม่ยอมบอกชื่อ เช่น สมาชิกปิดการเข้าถึงโปรไฟล์ */
 export const FALLBACK_DISPLAY_NAME = "สมาชิก";
@@ -13,7 +13,7 @@ export async function ensureUser(
   lineGroupId: string,
   lineUserId: string,
   accessToken: string,
-): Promise<UserRow> {
+): Promise<LineUserRow> {
   const displayName = await getGroupMemberDisplayName(lineGroupId, lineUserId, accessToken);
   return upsertUser(lineUserId, displayName ?? FALLBACK_DISPLAY_NAME);
 }

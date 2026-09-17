@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buttonLabels, hasButtons, messageText } from "./helpers";
+import { buttonLabels, hasButtons, makeBill, makeItem, makeShare, messageText } from "./helpers";
 import {
   askCourtCount,
   askCourtFee,
@@ -47,18 +47,18 @@ const game: GameRow = {
   edit_count: 0,
 };
 
-const bill: BillRow = {
-  id: "1",
-  game_id: "1",
-  created_by: "1",
-  status: "sent",
-  items: [{ label: "ค่าคอร์ท", quantity: 1, unit_price_satang: 60000, amount_satang: 60000 }],
-  total_satang: 60000,
-};
+const bill: BillRow = makeBill({ total_satang: 60000 });
+
+const items = [
+  makeItem(0, "ค่าคอร์ท", 60000, [
+    { user_id: "1", display_name: "เชวง", amount_satang: 30000 },
+    { user_id: "2", display_name: "Bank", amount_satang: 30000 },
+  ]),
+];
 
 const shares: BillShareRow[] = [
-  { id: "1", bill_id: "1", user_id: "1", amount_satang: 30000, paid: true, display_name: "เชวง" },
-  { id: "2", bill_id: "1", user_id: "2", amount_satang: 30000, paid: false, display_name: "Bank" },
+  makeShare("1", "เชวง", true, 30000),
+  makeShare("2", "Bank", false, 30000),
 ];
 
 const draft = {
@@ -83,10 +83,10 @@ describe("ข้อความผลลัพธ์ต้องไม่มี�
     ["ถอนชื่อสำเร็จ", leftNotice("เชวง", 4, 8)],
     ["การ์ดรอบตี", gameCard(game, 5, "🏸 เปิดรอบตีแล้ว")],
     ["รายชื่อผู้เล่น", playerList(game, [{ display_name: "เชวง" }])],
-    ["การ์ดบิล", billCard(game, bill, shares, "💰 คิดเงินแล้ว")],
-    ["รายชื่อคนค้างจ่าย", unpaidList(game, bill, shares)],
-    ["บันทึกว่าจ่ายแล้ว", paymentRecorded("เชวง", 30000, shares)],
-    ["ย้อนกลับเป็นยังไม่จ่าย", paymentUndone("เชวง", shares)],
+    ["การ์ดบิล", billCard(bill, items, shares, "💰 คิดเงินแล้ว")],
+    ["รายชื่อคนค้างจ่าย", unpaidList(bill, shares)],
+    ["บันทึกว่าจ่ายแล้ว", paymentRecorded("เชวง", { shares, people: [{ user: { display_name: "เชวง" }, amountSatang: 30000 }], refused: [] })],
+    ["ย้อนกลับเป็นยังไม่จ่าย", paymentUndone("เชวง", { shares, people: [{ user: { display_name: "เชวง" }, amountSatang: 30000 }], refused: [] })],
     ["ยกเลิกรอบแล้ว", gameCancelled()],
     ["ปิดรอบแล้ว", gameClosed()],
     ["ปิดรอบแล้วแต่ยังมีคนค้าง", gameClosed([shares[1]!])],

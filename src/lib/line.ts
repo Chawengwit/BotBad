@@ -162,6 +162,54 @@ export async function replyMessages(
 }
 
 /**
+ * ส่งข้อความเข้ากลุ่มโดยไม่มี replyToken ใช้กับ cron เท่านั้น (PRP guests-split-bills-and-digest §6)
+ *
+ * ต่างจาก reply ตรงที่ **ไม่ฟรี** และนับตามจำนวนคนในกลุ่ม ไม่ใช่ตามจำนวนข้อความ
+ * ส่งเข้ากลุ่ม 30 คนครั้งเดียว = ตัดโควตา 30 ข้อความ
+ */
+export async function pushMessages(
+  to: string,
+  messages: LineMessage[],
+  accessToken: string,
+): Promise<void> {
+  await callLineApi(
+    "/message/push",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to, messages: messages.slice(0, MAX_REPLY_MESSAGES) }),
+    },
+    accessToken,
+  );
+}
+
+export type MessageQuota = {
+  /** เพดานของเดือนนี้ null = ไม่จำกัด */
+  limit: number | null;
+  used: number;
+};
+
+/**
+ * เพดานและยอดที่ใช้ไปของเดือนนี้ เรียกแล้วไม่เสียโควตา
+ * ใช้เป็นเบรกมือก่อน push (PRP §6.4)
+ */
+export async function getMessageQuota(accessToken: string): Promise<MessageQuota> {
+  const [quota, consumption] = await Promise.all([
+    callLineApi("/message/quota", { method: "GET" }, accessToken).then(
+      (response) => response.json() as Promise<{ type?: string; value?: number }>,
+    ),
+    callLineApi("/message/quota/consumption", { method: "GET" }, accessToken).then(
+      (response) => response.json() as Promise<{ totalUsage?: number }>,
+    ),
+  ]);
+
+  return {
+    limit: quota.type === "limited" && typeof quota.value === "number" ? quota.value : null,
+    used: consumption.totalUsage ?? 0,
+  };
+}
+
+/**
  * ชื่อที่แสดงของสมาชิกในกลุ่ม
  * ต้องใช้ endpoint ของกลุ่ม เพราะ /profile ใช้ได้เฉพาะคนที่เพิ่มบอทเป็นเพื่อนแล้ว
  */

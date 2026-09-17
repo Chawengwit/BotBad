@@ -6,7 +6,7 @@ import { runAgent } from "@/llm/agent";
 import { insertGame } from "@/repositories/game.repository";
 import { loadSessionMessages } from "@/repositories/session.repository";
 import { upsertUser } from "@/repositories/user.repository";
-import type { GameRow, UserRow } from "@/repositories/types";
+import type { GameRow, LineUserRow } from "@/repositories/types";
 import { joinGame } from "@/services/player.service";
 import { canRunDbTests, createTestSql, testLineUserId } from "./helpers";
 import { messageTexts } from "../helpers";
@@ -42,14 +42,14 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
   async function cleanup(): Promise<void> {
     await sql`DELETE FROM conversation_sessions WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM pending_actions WHERE line_group_id = ${GROUP_ID}`;
-    await sql`DELETE FROM bill_shares WHERE bill_id IN (
-      SELECT b.id FROM bills b JOIN games g ON g.id = b.game_id WHERE g.line_group_id = ${GROUP_ID}
-    )`;
-    await sql`DELETE FROM bills WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
+    // ลบผ่าน line_group_id ของบิลโดยตรง บิลลอย ๆ ไม่มี game_id ให้ไล่ตาม
+    // bill_shares, bill_items และ bill_item_payers หลุดตามด้วย ON DELETE CASCADE
+    await sql`DELETE FROM bills WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM game_players WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
     await sql`DELETE FROM games WHERE line_group_id = ${GROUP_ID}`;
     if (lineUserIds.length > 0) {
       await sql`DELETE FROM users WHERE line_user_id = ANY(${lineUserIds})`;
+      await sql`DELETE FROM users WHERE line_group_id = ${GROUP_ID}`;
       lineUserIds.length = 0;
     }
   }
@@ -70,7 +70,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
     await closeSql();
   });
 
-  async function newUser(name = "เชวง"): Promise<{ lineUserId: string; user: UserRow }> {
+  async function newUser(name = "เชวง"): Promise<{ lineUserId: string; user: LineUserRow }> {
     const lineUserId = testLineUserId();
     lineUserIds.push(lineUserId);
     return { lineUserId, user: await upsertUser(lineUserId, name, sql) };
@@ -94,7 +94,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
 
   /** เทสชุดนี้สนใจแค่ข้อความที่ตอบกลับ ส่วน done มีเทสแยกในชุดโหมดฟัง */
   async function run(
-    user: { lineUserId: string; user: UserRow },
+    user: { lineUserId: string; user: LineUserRow },
     text: string,
     client: GeminiClient,
   ): Promise<LineMessage[]> {
@@ -152,8 +152,9 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
     );
 
     const text = messageTexts(messages);
-    expect(text).toContain("รวม 700.00");
-    expect(text).toContain("หาร 1 คน");
+    expect(text).toContain("700.00");
+    // การ์ดใหม่ขึ้นยอดรายคนแทน "หาร N คน" เพราะแต่ละคนไม่เท่ากันแล้ว
+    expect(text).toContain("เชวง");
 
     expect(await sql`SELECT id FROM bills WHERE game_id = ${game.id}`).toHaveLength(0);
     const pending = await sql<{ action_type: string }[]>`
@@ -191,11 +192,13 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
     await joinGame(GROUP_ID, other.user.id);
 
     const bill = await sql<{ id: string }[]>`
-      INSERT INTO bills (game_id, created_by, items, total_satang)
-      VALUES (${game.id}, ${owner.user.id}, ${sql.json([
-        { label: "ค่าคอร์ท", quantity: 1, unit_price_satang: 20000, amount_satang: 20000 },
-      ])}, 20000)
+      INSERT INTO bills (line_group_id, game_id, created_by, title, items, total_satang)
+      VALUES (${GROUP_ID}, ${game.id}, ${owner.user.id}, 'บิลทดสอบ', ${sql.json([])}, 20000)
       RETURNING id
+    `;
+    await sql`
+      INSERT INTO bill_items (bill_id, position, label, quantity, unit_price_satang, amount_satang)
+      VALUES (${bill[0]!.id}, 0, 'ค่าคอร์ท', 1, 20000, 20000)
     `;
     await sql`
       INSERT INTO bill_shares (bill_id, user_id, amount_satang)

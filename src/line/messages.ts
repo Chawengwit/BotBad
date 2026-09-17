@@ -26,7 +26,7 @@ import type { PendingActionType } from "@/repositories/pending-action.repository
 import { WAKE_WORD } from "@/router/wake-word";
 import { MAX_PLAYERS, MIN_PLAYERS, type GameDraft } from "@/services/game.service";
 import { summarize, toBaht } from "@/services/bill.service";
-import type { BillItem, BillRow, BillShareRow } from "@/repositories/types";
+import type { BillItemRow, BillRow, BillShareRow } from "@/repositories/types";
 import type { EditPatch } from "@/services/game-admin.service";
 import type { GameRow } from "@/repositories/types";
 
@@ -440,6 +440,68 @@ export function joinedNotice(
   return text(`✅ ${displayName} ลงชื่อแล้ว\n👥 ${joinedCount}/${maxPlayers} คน`);
 }
 
+/**
+ * ลงชื่อแทนกัน ต้องบอกให้ทั้งกลุ่มเห็นว่าใครทำให้ใคร (PRP guests-split-bills-and-digest §4.7)
+ * ไม่ใช่ขึ้นแค่ชื่อคนถูกลง ไม่งั้นคนอ่านไม่รู้ว่าใครเป็นคนพามา
+ */
+export function joinedForNotice(
+  actorName: string,
+  result: {
+    joinedCount: number;
+    people: { display_name: string }[];
+    skipped: { user: { display_name: string }; reason: string }[];
+  },
+  newGuests: string[] = [],
+): TextMessage {
+  const names = result.people.map((person) => person.display_name);
+  const already = result.skipped
+    .filter((entry) => entry.reason === "already_joined")
+    .map((entry) => entry.user.display_name);
+
+  return text(
+    [
+      names.length > 0
+        ? `✅ ${actorName} ลงชื่อให้ ${names.join(", ")}`
+        : `ℹ️ ไม่มีใครถูกลงชื่อเพิ่ม`,
+      ...(newGuests.length > 0 ? [`🆕 เพิ่มแขกใหม่: ${newGuests.join(", ")}`] : []),
+      ...(already.length > 0 ? [`ℹ️ ${already.join(", ")} ลงชื่อไว้อยู่แล้ว`] : []),
+      `👥 ${result.joinedCount} คน`,
+    ].join("\n"),
+  );
+}
+
+export function leftForNotice(
+  actorName: string,
+  result: {
+    joinedCount: number;
+    people: { display_name: string }[];
+    skipped: { user: { display_name: string }; reason: string }[];
+  },
+  unknownNames: string[] = [],
+): TextMessage {
+  const names = result.people.map((person) => person.display_name);
+  const notYours = result.skipped
+    .filter((entry) => entry.reason === "not_yours")
+    .map((entry) => entry.user.display_name);
+  const notJoined = result.skipped
+    .filter((entry) => entry.reason === "not_joined")
+    .map((entry) => entry.user.display_name);
+
+  return text(
+    [
+      names.length > 0
+        ? `👋 ${actorName} ถอนชื่อให้ ${names.join(", ")}`
+        : "ℹ️ ไม่มีใครถูกถอนชื่อ",
+      ...(notYours.length > 0
+        ? [`⛔ ${notYours.join(", ")} ถอนได้เฉพาะเจ้าตัวกับคนที่ลงชื่อให้`]
+        : []),
+      ...(notJoined.length > 0 ? [`ℹ️ ${notJoined.join(", ")} ไม่ได้ลงชื่อไว้`] : []),
+      ...(unknownNames.length > 0 ? [`❓ ไม่รู้จัก ${unknownNames.join(", ")}`] : []),
+      `👥 ${result.joinedCount} คน`,
+    ].join("\n"),
+  );
+}
+
 export function leftNotice(
   displayName: string,
   joinedCount: number,
@@ -743,7 +805,7 @@ function itemIcon(label: string): string {
   return "➕";
 }
 
-function itemLabel(item: BillItem): string {
+function itemLabel(item: { label: string; quantity: number; unit_price_satang: number }): string {
   const detail =
     item.quantity > 1
       ? `${item.label} ${item.quantity} ลูก × ${formatBaht(item.unit_price_satang)}`
@@ -751,37 +813,76 @@ function itemLabel(item: BillItem): string {
   return `${itemIcon(item.label)} ${detail}`;
 }
 
-/** ตัวบิล: รายการทีละบรรทัด ตัวเลขชิดขวา แล้วปิดท้ายด้วยยอดรวมและยอดต่อคน */
+/** ชื่อคนร่วมจ่ายของรายการ ถ้าเก็บทุกคนในบิลก็ไม่ต้องไล่ชื่อให้รก */
+function payerLabel(payers: { display_name: string }[], headCount: number): string {
+  if (payers.length >= headCount) return "ทุกคน";
+  return payers.map((payer) => payer.display_name).join(", ");
+}
+
+/**
+ * ตัวบิล: รายการทีละบรรทัดพร้อมคนร่วมจ่าย แล้วปิดท้ายด้วยยอดรวมและยอดรายคน
+ * ของเดิมขึ้น "คนละ X" ได้เพราะทุกคนเท่ากัน ตอนนี้แต่ละคนไม่เท่ากันแล้ว (PRP §5.7)
+ */
 function billBody(
-  game: GameRow,
-  items: BillItem[],
+  billTitle: string,
+  items: BillItemRow[],
   totalSatang: number,
-  headCount: number,
+  shares: BillShareRow[],
 ): FlexComponent[] {
+  const headCount = shares.length;
+
   return [
-    title(`คิดเงินรอบ ${formatThaiDate(game.play_date)}`),
+    title(billTitle),
     vbox(
-      items.map((item) => amountRow(itemLabel(item), formatBaht(item.amount_satang))),
-      { spacing: "sm", margin: "lg" },
+      items.map((item) =>
+        vbox(
+          [
+            amountRow(itemLabel(item), formatBaht(item.amount_satang)),
+            note(payerLabel(item.payers, headCount)),
+          ],
+          { spacing: "none" },
+        ),
+      ),
+      { spacing: "md", margin: "lg" },
     ),
     separator("lg"),
     vbox([amountRow("รวม", formatBaht(totalSatang), true)], { margin: "lg" }),
-    note(`หาร ${headCount} คน → คนละ ${formatBaht(Math.floor(totalSatang / headCount))}`),
   ];
+}
+
+/** ยอดของแต่ละคน พร้อมสถานะจ่าย และคนที่จ่ายแทนถ้ามี */
+function shareRows(shares: BillShareRow[]): FlexComponent[] {
+  return shares.map((share) =>
+    amountRow(
+      `${share.paid ? "✅" : "⭕"} ${share.display_name}${
+        share.paid && share.paid_by_name && share.paid_by_name !== share.display_name
+          ? ` (${share.paid_by_name} จ่ายให้)`
+          : ""
+      }`,
+      formatBaht(share.amount_satang),
+    ),
+  );
 }
 
 export function confirmBill(
   pendingId: string,
-  game: GameRow,
-  items: BillItem[],
+  title: string,
+  items: BillItemRow[],
   totalSatang: number,
-  headCount: number,
+  shares: BillShareRow[],
 ): FlexMessage {
   return flexMessage(
     "ส่งบิลเข้ากลุ่มเลยไหม?",
     bubble({
       header: header("💰 ตรวจบิลก่อนส่ง"),
-      body: vbox(billBody(game, items, totalSatang, headCount), { paddingAll: "20px" }),
+      body: vbox(
+        [
+          ...billBody(title, items, totalSatang, shares),
+          separator("lg"),
+          vbox(shareRows(shares), { spacing: "sm", margin: "lg" }),
+        ],
+        { paddingAll: "20px" },
+      ),
       footer: footerButtons(confirmActions(pendingId, "ส่งบิล")),
     }),
   );
@@ -789,24 +890,28 @@ export function confirmBill(
 
 /** การ์ดบิล — Flex ไม่มีปุ่ม ใครจ่ายแล้วพิมพ์ "บอทจ๋า จ่ายแล้ว" เอง (spec §23) */
 export function billCard(
-  game: GameRow,
   bill: BillRow,
+  items: BillItemRow[],
   shares: BillShareRow[],
   headline?: string,
 ): FlexMessage {
   const { unpaid, settled } = summarize(shares);
 
   return flexMessage(
-    headline ?? `บิลรอบ ${formatThaiDate(game.play_date)}`,
+    headline ?? `บิล ${bill.title}`,
     bubble({
       ...(headline ? { header: header(headline) } : {}),
       body: vbox(
         [
-          ...billBody(game, bill.items, bill.total_satang, shares.length),
+          ...billBody(bill.title, items, bill.total_satang, shares),
+          separator("lg"),
+          vbox(shareRows(shares), { spacing: "sm", margin: "lg" }),
           separator("lg"),
           vbox(
             [
-              ...(game.promptpay ? [infoRow("💸", `พร้อมเพย์ ${formatPromptPay(game.promptpay)}`)] : []),
+              ...(bill.promptpay
+                ? [infoRow("💸", `โอนให้ ${creatorName(shares, bill)} · ${formatPromptPay(bill.promptpay)}`)]
+                : []),
               infoRow(
                 settled ? "✅" : "⭕",
                 settled ? "จ่ายครบทุกคนแล้ว" : `ยังไม่จ่าย ${unpaid.length} คน`,
@@ -819,6 +924,11 @@ export function billCard(
       ),
     }),
   );
+}
+
+/** ชื่อคนรับโอน ดึงจากยอดของคนสร้างบิล ไม่งั้นการ์ดจะมีแต่ตัวเลขไม่รู้ว่าโอนให้ใคร */
+function creatorName(shares: BillShareRow[], bill: BillRow): string {
+  return shares.find((share) => share.user_id === bill.created_by)?.display_name ?? "คนเปิดบิล";
 }
 
 /** รายชื่อว่าใครจ่ายแล้วใครยังค้าง แยกเป็นสองกลุ่มให้กวาดตาดูจบในทีเดียว */
@@ -836,7 +946,7 @@ function payerGroup(heading: string, color: string, names: string[]): FlexCompon
   ];
 }
 
-export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[]): FlexMessage {
+export function unpaidList(bill: BillRow, shares: BillShareRow[]): FlexMessage {
   const { paid, unpaid, unpaidTotalSatang, settled } = summarize(shares);
   const names = (list: BillShareRow[]) => list.map((share) => share.display_name);
 
@@ -845,8 +955,7 @@ export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[])
     bubble({
       body: vbox(
         [
-          title(`รอบ ${formatThaiDate(game.play_date)}`),
-          note(`คนละ ${formatBaht(shares[0]?.amount_satang ?? 0)}`),
+          title(bill.title),
           ...payerGroup("✅ จ่ายแล้ว", COLOR.accent, names(paid)),
           ...(settled
             ? [note("🎉 จ่ายครบทุกคนแล้ว", COLOR.accent)]
@@ -856,8 +965,8 @@ export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[])
                 vbox(
                   [
                     amountRow("ยังไม่ได้รับ", formatBaht(unpaidTotalSatang), true),
-                    ...(game.promptpay
-                      ? [infoRow("💸", `พร้อมเพย์ ${formatPromptPay(game.promptpay)}`)]
+                    ...(bill.promptpay
+                      ? [infoRow("💸", `พร้อมเพย์ ${formatPromptPay(bill.promptpay)}`)]
                       : []),
                   ],
                   { spacing: "sm", margin: "lg" },
@@ -870,29 +979,78 @@ export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[])
   );
 }
 
-export function paymentRecorded(
-  displayName: string,
-  amountSatang: number,
-  shares: BillShareRow[],
-): TextMessage {
-  const { unpaid, settled } = summarize(shares);
+/** รายชื่อบิลที่เปิดอยู่ ใช้ตอนผู้ใช้ไม่ได้ระบุว่าหมายถึงใบไหน */
+export function billChoices(titles: string[]): TextMessage {
+  return text(
+    [
+      "❓ ตอนนี้มีบิลค้างอยู่หลายใบ",
+      "",
+      ...titles.map((title) => `• ${title}`),
+      "",
+      'ระบุชื่อบิลด้วย เช่น "บอทจ๋า บิล ' + (titles[0] ?? "ค่ากินข้าว") + '"',
+    ].join("\n"),
+  );
+}
+
+type PaymentOutcome = {
+  shares: BillShareRow[];
+  people: { user: { display_name: string }; amountSatang: number }[];
+  refused: { user: { display_name: string }; reason: string }[];
+};
+
+function refusedLines(refused: PaymentOutcome["refused"]): string[] {
+  const notInBill = refused
+    .filter((entry) => entry.reason === "not_in_bill")
+    .map((entry) => entry.user.display_name);
+  const notAllowed = refused
+    .filter((entry) => entry.reason === "not_allowed")
+    .map((entry) => entry.user.display_name);
+
+  return [
+    ...(notInBill.length > 0 ? [`ℹ️ ${notInBill.join(", ")} ไม่ได้อยู่ในบิลนี้`] : []),
+    ...(notAllowed.length > 0
+      ? [`⛔ ${notAllowed.join(", ")} กดแทนได้เฉพาะเจ้าตัว คนที่พามา หรือคนเปิดบิล`]
+      : []),
+  ];
+}
+
+export function paymentRecorded(actorName: string, result: PaymentOutcome): TextMessage {
+  const { unpaid, settled } = summarize(result.shares);
+  const total = result.people.reduce((sum, entry) => sum + entry.amountSatang, 0);
+  const names = result.people.map((entry) => entry.user.display_name);
+  const others = names.filter((name) => name !== actorName);
 
   return text(
     [
-      `✅ บันทึกแล้ว ${displayName} จ่าย ${formatBaht(amountSatang)}`,
+      names.length > 0
+        ? `✅ บันทึกแล้ว ${actorName} จ่าย ${formatBaht(total)}${
+            others.length > 0 ? ` (รวม ${others.join(", ")})` : ""
+          }`
+        : "ℹ️ ไม่มีอะไรถูกบันทึก",
+      ...refusedLines(result.refused),
       settled ? "🎉 ครบทุกคนแล้ว" : `เหลืออีก ${unpaid.length} คน`,
     ].join("\n"),
   );
 }
 
-export function paymentUndone(displayName: string, shares: BillShareRow[]): TextMessage {
-  const { unpaid } = summarize(shares);
-  return text(`↩️ เอา ${displayName} กลับไปเป็นยังไม่จ่ายแล้ว\n\nค้างอยู่ ${unpaid.length} คน`);
+export function paymentUndone(actorName: string, result: PaymentOutcome): TextMessage {
+  const { unpaid } = summarize(result.shares);
+  const names = result.people.map((entry) => entry.user.display_name);
+
+  return text(
+    [
+      names.length > 0
+        ? `↩️ ${actorName} เอา ${names.join(", ")} กลับไปเป็นยังไม่จ่ายแล้ว`
+        : "ℹ️ ไม่มีอะไรถูกเปลี่ยน",
+      ...refusedLines(result.refused),
+      `ค้างอยู่ ${unpaid.length} คน`,
+    ].join("\n"),
+  );
 }
 
 export function confirmCancelBill(
   pendingId: string,
-  game: GameRow,
+  bill: BillRow,
   shares: BillShareRow[],
 ): FlexMessage {
   const { paid } = summarize(shares);
@@ -900,10 +1058,10 @@ export function confirmCancelBill(
   return flexMessage(
     "ยกเลิกบิล?",
     bubble({
-      header: header("⚠️ ยกเลิกบิลรอบนี้?", COLOR.warn),
+      header: header("⚠️ ยกเลิกบิลนี้?", COLOR.warn),
       body: vbox(
         [
-          title(formatThaiDate(game.play_date)),
+          title(bill.title),
           ...(paid.length > 0
             ? [note(`มีคนบอกว่าจ่ายแล้ว ${paid.length} คน การยกเลิกจะลบบันทึกนั้นทิ้งด้วย`, COLOR.warn)]
             : []),
@@ -918,6 +1076,91 @@ export function confirmCancelBill(
 
 export function billCancelled(): TextMessage {
   return text('🗑️ ยกเลิกบิลแล้ว\n\nคิดใหม่ได้ด้วย "บอทจ๋า คิดเงิน"');
+}
+
+/**
+ * การ์ดสรุปประจำสัปดาห์ ส่งเข้ากลุ่มทุกวันศุกร์ 10 โมง (PRP guests-split-bills-and-digest §6.2)
+ *
+ * ห้ามมีชื่อคนค้างจ่ายเด็ดขาด บอกได้แค่จำนวนใบกับยอดรวม
+ * ใครอยากรู้ว่าใครค้างให้พิมพ์ถามเอง ซึ่งเป็น reply และฟรี
+ */
+export function digestCard(lines: {
+  game: {
+    playDate: string;
+    startTime: string;
+    durationMinutes: number;
+    courtName: string | null;
+    joined: number;
+    max: number;
+  } | null;
+  gameIsOverdue: boolean;
+  unpaidBillCount: number;
+  unpaidTotalSatang: number;
+}): FlexMessage {
+  const body: FlexComponent[] = [];
+
+  if (lines.game) {
+    const { playDate, startTime, durationMinutes, courtName, joined, max } = lines.game;
+    body.push(
+      vbox(
+        [
+          {
+            type: "text",
+            text: lines.gameIsOverdue ? "🏸 รอบที่ยังไม่ได้ปิด" : "🏸 มีนัด",
+            size: "sm",
+            weight: "bold",
+            color: lines.gameIsOverdue ? COLOR.warn : COLOR.accent,
+          },
+          {
+            type: "text",
+            text: `${formatThaiDate(playDate)} ${formatTimeRange(startTime, durationMinutes)}${courtName ? ` · ${courtName}` : ""}`,
+            size: "sm",
+            color: COLOR.ink,
+            wrap: true,
+          },
+          {
+            type: "text",
+            text: lines.gameIsOverdue
+              ? 'เล่นจบแล้วพิมพ์ "บอทจ๋า ปิดรอบ" เพื่อเปิดรอบใหม่ได้'
+              : `ลงชื่อแล้ว ${joined}/${max} คน`,
+            size: "sm",
+            color: COLOR.muted,
+            wrap: true,
+          },
+        ],
+        { spacing: "xs" },
+      ),
+    );
+  }
+
+  if (lines.unpaidBillCount > 0) {
+    if (body.length > 0) body.push(separator("lg"));
+
+    body.push(
+      vbox(
+        [
+          { type: "text", text: "💰 บิลค้างจ่าย", size: "sm", weight: "bold", color: COLOR.warn },
+          {
+            type: "text",
+            text: `${lines.unpaidBillCount} ใบ ยังไม่ได้รับ ${formatBaht(lines.unpaidTotalSatang)}`,
+            size: "sm",
+            color: COLOR.ink,
+            wrap: true,
+          },
+          note('คนเปิดบิลพิมพ์ "บอทจ๋า ใครยังไม่จ่าย" เพื่อดูรายชื่อ'),
+        ],
+        { spacing: "xs", margin: "lg" },
+      ),
+    );
+  }
+
+  return flexMessage(
+    "สรุปประจำสัปดาห์",
+    bubble({
+      header: header("☀️ สรุปประจำสัปดาห์"),
+      body: vbox(body, { paddingAll: "20px" }),
+    }),
+  );
 }
 
 /**
@@ -1011,6 +1254,22 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
       return text('❌ รอบนี้ยังไม่ได้คิดเงิน\n\nคนที่เปิดรอบพิมพ์ "บอทจ๋า คิดเงิน" ได้เลย');
     case "BILL_ALREADY_EXISTS":
       return text('⛔ รอบนี้คิดเงินไปแล้ว\n\nถ้าจะคิดใหม่ต้องพิมพ์ "บอทจ๋า ยกเลิกบิล" ก่อน');
+    case "NOT_YOUR_GUEST":
+      return text("⛔ ถอนได้เฉพาะตัวเอง กับคนที่คุณลงชื่อให้");
+    case "PERSON_NOT_FOUND": {
+      const names = (details.names as string[] | undefined) ?? [];
+      return text(
+        [
+          `❓ ไม่รู้จัก ${names.join(", ") || "ชื่อนี้"} ในกลุ่มนี้`,
+          "",
+          "ถ้าเป็นแขกที่พามาใหม่ พิมพ์ “บอทจ๋า ลงชื่อ <ชื่อ>” เพื่อเพิ่มได้เลย",
+        ].join("\n"),
+      );
+    }
+    case "PERSON_AMBIGUOUS": {
+      const names = (details.names as string[] | undefined) ?? [];
+      return text(`❓ มีหลายคนชื่อ ${names.join(", ")} ในกลุ่มนี้ ระบุให้ชัดกว่านี้หน่อย`);
+    }
     case "NOT_IN_BILL":
       return text("ℹ️ คุณไม่ได้อยู่ในบิลรอบนี้");
     case "NO_PLAYERS_TO_SPLIT":

@@ -9,6 +9,7 @@ import {
 } from "@/services/game.service";
 import { DATE_PATTERN, TIME_PATTERN } from "@/lib/time";
 import { billDraftSchema } from "@/services/bill.service";
+import { MAX_NAMES_PER_COMMAND, MAX_NAME_LENGTH } from "@/services/people.service";
 
 /**
  * Tool ที่ LLM เรียกได้ (LLM Design §6)
@@ -48,6 +49,33 @@ const gameFields = {
     type: Type.STRING,
     description:
       "เลขพร้อมเพย์ที่ให้โอนตอนคิดเงิน เป็นเบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก ใส่เฉพาะเมื่อผู้ใช้บอกเลขมา",
+  },
+};
+
+const billTitleField = {
+  bill_title: {
+    type: Type.STRING,
+    description:
+      "ชื่อบิลที่หมายถึง ใส่เฉพาะเมื่อผู้ใช้เอ่ยชื่อบิลมาเอง กลุ่มมีบิลเปิดพร้อมกันได้หลายใบ",
+  },
+};
+
+const peopleFields = {
+  names: {
+    type: Type.ARRAY,
+    items: { type: Type.STRING },
+    description:
+      "ชื่อคนที่ทำรายการให้ ตามที่ผู้ใช้พิมพ์มาเป๊ะ ๆ ห้ามเดาหรือแต่งชื่อเอง " +
+      "ใส่เฉพาะชื่อที่ผู้ใช้เอ่ยถึงจริง ไม่ต้องใส่ชื่อผู้ใช้เองเว้นแต่เขาระบุมาด้วย",
+  },
+};
+
+const billTitleOnCreate = {
+  title: {
+    type: Type.STRING,
+    description:
+      "ชื่อบิล ใส่เมื่อผู้ใช้อยากคิดเงินเรื่องที่ไม่ใช่ค่ารอบตี เช่น ค่ากินข้าวหลังตี " +
+      "ไม่ใส่ = คิดเงินของรอบที่เปิดอยู่ และระบบตั้งชื่อให้เอง",
   },
 };
 
@@ -91,12 +119,16 @@ export const toolDeclarations: FunctionDeclaration[] = [
   {
     name: "join_game",
     description:
-      "ลงชื่อ 'ผู้ใช้ที่พิมพ์ข้อความนี้' เข้ารอบที่เปิดอยู่ ใช้เมื่อผู้ใช้บอกว่าจะไปตี ไปด้วย หรือขอลงชื่อ ห้ามใช้ลงชื่อแทนคนอื่น",
+      "ลงชื่อเข้ารอบที่เปิดอยู่ ไม่ส่ง names มาคือลงชื่อ 'ผู้ใช้ที่พิมพ์ข้อความนี้' " +
+      "ถ้าผู้ใช้เอ่ยชื่อคนอื่นหรือบอกว่าพาเพื่อนมา ให้ส่งชื่อเหล่านั้นใน names",
+    parameters: { type: Type.OBJECT, properties: peopleFields },
   },
   {
     name: "leave_game",
     description:
-      "ถอนชื่อ 'ผู้ใช้ที่พิมพ์ข้อความนี้' ออกจากรอบที่เปิดอยู่ ใช้เมื่อผู้ใช้บอกว่าไปไม่ได้หรือขอถอนชื่อ ห้ามใช้ถอนชื่อแทนคนอื่น",
+      "ถอนชื่อออกจากรอบที่เปิดอยู่ ไม่ส่ง names มาคือถอน 'ผู้ใช้ที่พิมพ์ข้อความนี้' " +
+      "ถ้าผู้ใช้บอกให้ถอนคนอื่น ให้ส่งชื่อใน names ระบบจะตรวจสิทธิ์เองว่าถอนได้ไหม",
+    parameters: { type: Type.OBJECT, properties: peopleFields },
   },
   {
     name: "propose_create_game",
@@ -112,19 +144,24 @@ export const toolDeclarations: FunctionDeclaration[] = [
   },
   {
     name: "get_bill",
+    parameters: { type: Type.OBJECT, properties: billTitleField },
     description:
       "ดูบิลค่าใช้จ่ายของกลุ่มนี้ ได้รายการค่าใช้จ่าย ยอดต่อคน และใครจ่ายแล้วหรือยังไม่จ่าย ใช้เมื่อผู้ใช้ถามว่าคนละเท่าไหร่ ใครยังไม่จ่าย หรือขอดูบิล",
   },
   {
     name: "propose_create_bill",
     description:
-      "เสนอคิดเงินค่ารอบตีที่เปิดอยู่ หารเท่ากันทุกคนที่ลงชื่อ ยังไม่ส่งบิลจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ใช้ได้เฉพาะคนที่เปิดรอบ ส่งเฉพาะค่าที่ผู้ใช้บอกมาแล้ว",
-    parameters: { type: Type.OBJECT, properties: billFields },
+      "เสนอคิดเงิน หารเท่ากันทุกคนที่อยู่ในบิล ยังไม่ส่งบิลจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน " +
+      "ไม่ส่ง title = คิดเงินค่ารอบตีที่เปิดอยู่ ใช้ได้เฉพาะคนที่เปิดรอบ " +
+      "ส่ง title = บิลลอย ๆ ที่ไม่ผูกกับรอบ ใครในกลุ่มก็สร้างได้",
+    parameters: { type: Type.OBJECT, properties: { ...billFields, ...billTitleOnCreate } },
   },
   {
     name: "mark_my_payment",
     description:
-      "บันทึกว่า 'ผู้ใช้ที่พิมพ์ข้อความนี้' จ่ายเงินค่ารอบแล้วหรือยัง ใช้เมื่อผู้ใช้บอกว่าโอนแล้ว จ่ายแล้ว หรือขอแก้ว่ายังไม่ได้จ่าย ห้ามใช้บันทึกแทนคนอื่น",
+      "บันทึกว่าจ่ายเงินแล้วหรือยัง ไม่ส่ง names มาคือของ 'ผู้ใช้ที่พิมพ์ข้อความนี้' " +
+      "ถ้าเขาบอกว่าจ่ายแทนใคร เช่นจ่ายให้แขกที่พามา ให้ส่งชื่อเหล่านั้นใน names " +
+      "ระบบตรวจสิทธิ์เองว่ากดแทนได้ไหม",
     parameters: {
       type: Type.OBJECT,
       properties: {
@@ -132,6 +169,8 @@ export const toolDeclarations: FunctionDeclaration[] = [
           type: Type.BOOLEAN,
           description: "true = จ่ายแล้ว, false = กลับไปเป็นยังไม่จ่าย",
         },
+        ...peopleFields,
+        ...billTitleField,
       },
       required: ["paid"],
     },
@@ -149,6 +188,11 @@ export const toolDeclarations: FunctionDeclaration[] = [
 ];
 
 const noArgs = z.object({}).strict();
+
+const peopleArgs = z
+  .object({ names: z.array(z.string().trim().min(1).max(MAX_NAME_LENGTH)).max(MAX_NAMES_PER_COMMAND) })
+  .partial()
+  .strict();
 
 const gameArgs = z
   .object({
@@ -168,15 +212,22 @@ const gameArgs = z
 export const toolSchemas = {
   get_open_game: noArgs,
   list_players: noArgs,
-  join_game: noArgs,
-  leave_game: noArgs,
+  join_game: peopleArgs,
+  leave_game: peopleArgs,
   propose_create_game: gameArgs,
   propose_edit_game: gameArgs,
   propose_cancel_game: noArgs,
   propose_close_game: noArgs,
-  get_bill: noArgs,
-  propose_create_bill: billDraftSchema.strict(),
-  mark_my_payment: z.object({ paid: z.boolean() }).strict(),
+  get_bill: z.object({ bill_title: z.string().trim().max(60) }).partial().strict(),
+  propose_create_bill: billDraftSchema.extend({ title: z.string().trim().max(60) }).partial().strict(),
+  mark_my_payment: z
+    .object({
+      paid: z.boolean(),
+      names: z.array(z.string().trim().min(1).max(MAX_NAME_LENGTH)).max(MAX_NAMES_PER_COMMAND),
+      bill_title: z.string().trim().max(60),
+    })
+    .partial({ names: true, bill_title: true })
+    .strict(),
 } as const;
 
 export type ToolName = keyof typeof toolSchemas;
