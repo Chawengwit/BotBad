@@ -62,6 +62,7 @@ type AnyAction = { label?: string; data?: string; uri?: string };
 type AnyComponent = {
   type: string;
   text?: string;
+  layout?: string;
   contents?: AnyComponent[];
   action?: AnyAction;
 };
@@ -88,6 +89,23 @@ function flexParts(message: AnyMessage): AnyComponent[] {
   return parts;
 }
 
+/**
+ * แปลง component ของ Flex เป็นบรรทัดข้อความอย่างที่ผู้ใช้เห็นจริง
+ * box แนวนอนอยู่บรรทัดเดียวกัน box แนวตั้งขึ้นบรรทัดใหม่
+ * ถ้าแบนทุกอย่างเป็นบรรทัดละชิ้น เทสจะมองไม่เห็นว่า "รวม" กับ "600.00" อยู่แถวเดียวกัน
+ */
+function render(component: AnyComponent | undefined): string[] {
+  if (!component) return [];
+
+  if (component.type === "box") {
+    const lines = (component.contents ?? []).flatMap(render);
+    return component.layout === "horizontal" ? [lines.join(" ")] : lines;
+  }
+
+  // ปุ่มไม่นับเป็นเนื้อความ หา data ของปุ่มใช้ buttonData แทน
+  return typeof component.text === "string" ? [component.text] : [];
+}
+
 /** ข้อความทั้งหมดในข้อความเดียว ต่อกันด้วยขึ้นบรรทัดใหม่ */
 export function messageText(message: unknown): string {
   const any = message as AnyMessage;
@@ -95,9 +113,8 @@ export function messageText(message: unknown): string {
   if (any.type === "text") return any.text ?? "";
   if (any.type === "template") return any.template?.text ?? "";
 
-  return flexParts(any)
-    .map((node) => node.text)
-    .filter((text): text is string => typeof text === "string")
+  return [any.contents?.header, any.contents?.body, any.contents?.footer]
+    .flatMap(render)
     .join("\n");
 }
 

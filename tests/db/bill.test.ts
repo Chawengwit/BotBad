@@ -326,12 +326,9 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
       "ค่าเช่าไม้",
     ]);
 
-    // คนอื่นกดจ่ายแล้วจากปุ่มบนการ์ด
+    // การ์ดบิลไม่มีปุ่มแล้ว (spec §23) คนจ่ายพิมพ์บอกเอง
     const otherContext = contextFor(collected, "ผู้เล่น 1");
-    await handleEvent(
-      postbackEvent(actionData(collected, "💸 จ่ายแล้ว"), players[1]!.line_user_id),
-      otherContext,
-    );
+    await handleEvent(textEvent("บอทจ๋า จ่ายแล้ว", players[1]!.line_user_id), otherContext);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("เหลืออีก 3 คน");
   });
 
@@ -372,7 +369,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const context = contextFor(collected, "เชวง");
 
     await handleEvent(textEvent("บอทจ๋า ยกเลิกบิล", owner.line_user_id), context);
-    expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลของรอบ");
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลรอบนี้?");
 
     await handleEvent(postbackEvent(actionData(collected, "🗑️ ยกเลิกบิล"), owner.line_user_id), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลแล้ว");

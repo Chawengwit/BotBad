@@ -115,7 +115,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
     expect(messageTexts(collected[0]!.messages)).toContain("แก้ไขอะไร");
 
-    await handleEvent(postbackEvent(actionData(collected, "🏟️ จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "2 คอร์ท"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("1 → 2 คอร์ท");
 
@@ -159,7 +159,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "🏟️ จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "1 คอร์ท"), owner.lineUserId), context);
 
     const reply = messageTexts(collected.at(-1)!.messages);
@@ -220,7 +220,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "🏸 ชื่อคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "🏟️ ชื่อคอร์ท"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("คอร์ทไหน");
 
     await handleEvent(textEvent("คอร์ทใหม่เอี่ยม", owner.lineUserId), context);
@@ -278,7 +278,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
 
     async function editCourtCount(count: string): Promise<void> {
       await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-      await handleEvent(postbackEvent(actionData(collected, "🏟️ จำนวนคอร์ท"), owner.lineUserId), context);
+      await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
       await handleEvent(postbackEvent(actionData(collected, count), owner.lineUserId), context);
       await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
     }
@@ -322,7 +322,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า ยกเลิก", owner.lineUserId), context);
-    expect(messageTexts(collected[0]!.messages)).toContain("ยืนยันการยกเลิก");
+    expect(messageTexts(collected[0]!.messages)).toContain("ยกเลิกรอบตีนี้?");
 
     await handleEvent(postbackEvent(actionData(collected, "❌ ยืนยันยกเลิก"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกรอบตีเรียบร้อย");
@@ -400,7 +400,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "🏟️ จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "3 คอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
 
@@ -416,7 +416,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "🏟️ จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "3 คอร์ท"), owner.lineUserId), context);
 
     expect(messageTexts(collected.at(-1)!.messages)).toContain("รับ 16 → 24 คน");

@@ -126,7 +126,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
       ]),
     );
 
-    expect(messageTexts(messages)).toContain("ยืนยันไหม");
+    expect(messageTexts(messages)).toContain("ยืนยันเปิดรอบตี?");
     expect(messageTexts(messages)).toContain("ABC Badminton");
 
     // ยังไม่เปิดรอบจริง มีแค่รายการรอยืนยัน

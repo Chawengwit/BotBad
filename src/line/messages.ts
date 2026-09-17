@@ -370,7 +370,7 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): FlexMess
   return flexMessage(
     "ยืนยันเปิดรอบตี?",
     bubble({
-      header: header("🏸 เปิดรอบตีแบด"),
+      header: header("🏸 ยืนยันเปิดรอบตี?"),
       body: vbox(
         [
           title(draft.court_name),
@@ -381,7 +381,9 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): FlexMess
               infoRow("🏸", `${draft.court_count} คอร์ท`),
               infoRow("👥", `รับ ${draft.max_players} คน`),
               ...(draft.location_url ? [infoRow("📍", "มีลิงก์แผนที่")] : []),
-              ...(draft.promptpay ? [infoRow("💸", formatPromptPay(draft.promptpay))] : []),
+              ...(draft.promptpay
+                ? [infoRow("💸", `พร้อมเพย์ ${formatPromptPay(draft.promptpay)}`)]
+                : []),
             ],
             { spacing: "sm", margin: "lg" },
           ),
