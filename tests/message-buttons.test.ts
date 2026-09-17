@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasButtons, messageText } from "./helpers";
+import { buttonLabels, hasButtons, messageText } from "./helpers";
 import {
   askCourtCount,
   askCourtFee,
@@ -7,7 +7,9 @@ import {
   askLocation,
   askMaxPlayers,
   askPromptPay,
+  askSameVenue,
   askShuttleCount,
+  askWhen,
   billCard,
   confirmCancelGame,
   confirmCloseGame,
@@ -59,6 +61,15 @@ const shares: BillShareRow[] = [
   { id: "2", bill_id: "1", user_id: "2", amount_satang: 30000, paid: false, display_name: "Bank" },
 ];
 
+const draft = {
+  court_count: 1,
+  max_players: 8,
+  play_date: "2026-09-16",
+  start_time: "19:00",
+  duration_minutes: 120,
+  court_name: "ABC Badminton",
+};
+
 /**
  * บอทแนบปุ่มได้ 3 กรณีเท่านั้น (spec §23)
  *   1. กำลังถามเพื่อเดิน wizard ต่อ
@@ -90,6 +101,33 @@ describe("ข้อความผลลัพธ์ต้องไม่มี�
   });
 });
 
+/** ป้ายปุ่มเป็นข้อความล้วน อีโมจิอยู่ได้เฉพาะในเนื้อการ์ด */
+const EMOJI = /\p{Extended_Pictographic}/u;
+
+describe("ป้ายปุ่มต้องไม่มีอีโมจิ", () => {
+  it.each([
+    ["ถามจำนวนคอร์ท", askCourtCount(PENDING_ID)],
+    ["ถามวันและเวลา", askWhen(PENDING_ID)],
+    ["ถามจำนวนคน", askMaxPlayers(PENDING_ID, 1)],
+    ["ถามที่เดิม", askSameVenue(PENDING_ID, "ABC Badminton", true, "0812345678")],
+    ["ถามลิงก์แผนที่", askLocation(PENDING_ID)],
+    ["ถามเลขพร้อมเพย์", askPromptPay(PENDING_ID, "0812345678")],
+    ["เมนูแก้ไข", editMenu(PENDING_ID)],
+    ["ถามค่าคอร์ท", askCourtFee(PENDING_ID)],
+    ["ถามค่าอื่น ๆ", askExtraItem(PENDING_ID)],
+    ["ยืนยันเปิดรอบ", confirmCreateGame(PENDING_ID, draft)],
+    ["ยืนยันยกเลิกรอบ", confirmCancelGame(PENDING_ID, game, 5)],
+    ["ยืนยันปิดรอบ", confirmCloseGame(PENDING_ID, game, 5)],
+  ])("%s", (_label, message) => {
+    const labels = buttonLabels(message);
+    expect(labels.length).toBeGreaterThan(0);
+
+    for (const label of labels) {
+      expect(label, label).not.toMatch(EMOJI);
+    }
+  });
+});
+
 describe("ข้อความที่ถามหรือขอยืนยันต้องยังมีปุ่ม", () => {
   it.each([
     ["ถามจำนวนคอร์ท", askCourtCount(PENDING_ID)],
@@ -100,17 +138,7 @@ describe("ข้อความที่ถามหรือขอยืนย�
     ["ถามค่าคอร์ท", askCourtFee(PENDING_ID)],
     ["ถามจำนวนลูกแบด", askShuttleCount(PENDING_ID)],
     ["ถามค่าอื่น ๆ", askExtraItem(PENDING_ID)],
-    [
-      "ยืนยันเปิดรอบ",
-      confirmCreateGame(PENDING_ID, {
-        court_count: 1,
-        max_players: 8,
-        play_date: "2026-09-16",
-        start_time: "19:00",
-        duration_minutes: 120,
-        court_name: "ABC Badminton",
-      }),
-    ],
+    ["ยืนยันเปิดรอบ", confirmCreateGame(PENDING_ID, draft)],
     ["ยืนยันยกเลิกรอบ", confirmCancelGame(PENDING_ID, game, 5)],
     ["ยืนยันปิดรอบ", confirmCloseGame(PENDING_ID, game, 5)],
     ["ทักทายตอนเรียกชื่อเปล่า ๆ", greeting()],

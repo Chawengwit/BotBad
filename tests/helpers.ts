@@ -139,6 +139,22 @@ export function buttonData(messages: unknown[], label: string): string | undefin
   return undefined;
 }
 
+/** ป้ายของทุกปุ่มในข้อความนี้ */
+export function buttonLabels(message: unknown): string[] {
+  const any = message as AnyMessage;
+
+  return [
+    ...(any.template?.actions ?? []),
+    ...(any.quickReply?.items ?? []).map((item) => item.action),
+    ...flexParts(any)
+      .filter((node) => node.type === "button")
+      .map((node) => node.action)
+      .filter((action): action is AnyAction => action !== undefined),
+  ]
+    .map((action) => action.label)
+    .filter((label): label is string => typeof label === "string");
+}
+
 /** บอทแนบปุ่มมากับข้อความนี้ไหม (spec §23) */
 export function hasButtons(message: unknown): boolean {
   const any = message as AnyMessage;

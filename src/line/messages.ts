@@ -228,13 +228,13 @@ export function askSameVenue(
   return buttons("ที่เดิมไหม?", body, [
     {
       type: "postback",
-      label: "✅ ที่เดิม",
+      label: "ที่เดิม",
       displayText: "ที่เดิม",
       data: wizardData(pendingId, "venue", "same"),
     },
     {
       type: "postback",
-      label: "✏️ เปลี่ยนที่",
+      label: "เปลี่ยนที่",
       displayText: "เปลี่ยนที่",
       data: wizardData(pendingId, "venue", "change"),
     },
@@ -348,7 +348,7 @@ export function askAgain(message: string): TextMessage {
 function confirmActions(
   pendingId: string,
   confirmLabel: string,
-  rejectLabel = "❌ ยกเลิก",
+  rejectLabel = "ยกเลิก",
 ): MessageAction[] {
   return [
     {
@@ -390,7 +390,7 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): FlexMess
         ],
         { paddingAll: "20px" },
       ),
-      footer: footerButtons(confirmActions(pendingId, "✅ เปิดตี")),
+      footer: footerButtons(confirmActions(pendingId, "เปิดตี")),
     }),
   );
 }
@@ -482,14 +482,14 @@ export function editMenu(pendingId: string): TextMessage {
   return quickReplyText(
     "✏️ ต้องการแก้ไขอะไร?",
     [
-      { label: "🏸 จำนวนคอร์ท", value: "court" },
-      { label: "👥 จำนวนคน", value: "max" },
-      { label: "📅 วันที่", value: "date" },
-      { label: "⏰ เวลา", value: "time" },
-      { label: "⏱️ ระยะเวลา", value: "duration" },
-      { label: "🏟️ ชื่อคอร์ท", value: "name" },
-      { label: "📍 แผนที่", value: "location" },
-      { label: "💸 พร้อมเพย์", value: "promptpay" },
+      { label: "จำนวนคอร์ท", value: "court" },
+      { label: "จำนวนคน", value: "max" },
+      { label: "วันที่", value: "date" },
+      { label: "เวลา", value: "time" },
+      { label: "ระยะเวลา", value: "duration" },
+      { label: "ชื่อคอร์ท", value: "name" },
+      { label: "แผนที่", value: "location" },
+      { label: "พร้อมเพย์", value: "promptpay" },
     ].map((choice) => ({
       label: choice.label,
       data: wizardData(pendingId, "field", choice.value),
@@ -551,7 +551,7 @@ export function confirmEditGame(pendingId: string, game: GameRow, patch: EditPat
         ],
         { paddingAll: "20px" },
       ),
-      footer: footerButtons(confirmActions(pendingId, "✅ ยืนยัน")),
+      footer: footerButtons(confirmActions(pendingId, "ยืนยัน")),
     }),
   );
 }
@@ -572,7 +572,7 @@ export function confirmCancelGame(
         ],
         { paddingAll: "20px" },
       ),
-      footer: footerButtons(confirmActions(pendingId, "❌ ยืนยันยกเลิก", "กลับ")),
+      footer: footerButtons(confirmActions(pendingId, "ยืนยันยกเลิก", "กลับ")),
     }),
   );
 }
@@ -629,7 +629,7 @@ export function confirmCloseGame(
         ],
         { paddingAll: "20px" },
       ),
-      footer: footerButtons(confirmActions(pendingId, "✅ ปิดรอบ", "กลับ")),
+      footer: footerButtons(confirmActions(pendingId, "ปิดรอบ", "กลับ")),
     }),
   );
 }
@@ -722,9 +722,9 @@ export function askShuttlePrice(pendingId: string, lastPriceSatang: number | nul
 
 export function askExtraItem(pendingId: string): TextMessage {
   return quickReplyText("➕ มีค่าอื่นอีกไหม?", [
-    { label: "💧 ค่าน้ำ", data: wizardData(pendingId, "extra", "water") },
-    { label: "➕ อื่น ๆ", data: wizardData(pendingId, "extra", "other") },
-    { label: "✅ ไม่มีแล้ว", data: wizardData(pendingId, "extra", "done") },
+    { label: "ค่าน้ำ", data: wizardData(pendingId, "extra", "water") },
+    { label: "อื่น ๆ", data: wizardData(pendingId, "extra", "other") },
+    { label: "ไม่มีแล้ว", data: wizardData(pendingId, "extra", "done") },
   ]);
 }
 
@@ -782,7 +782,7 @@ export function confirmBill(
     bubble({
       header: header("💰 ตรวจบิลก่อนส่ง"),
       body: vbox(billBody(game, items, totalSatang, headCount), { paddingAll: "20px" }),
-      footer: footerButtons(confirmActions(pendingId, "✅ ส่งบิล")),
+      footer: footerButtons(confirmActions(pendingId, "ส่งบิล")),
     }),
   );
 }
@@ -911,7 +911,7 @@ export function confirmCancelBill(
         ],
         { paddingAll: "20px" },
       ),
-      footer: footerButtons(confirmActions(pendingId, "🗑️ ยกเลิกบิล")),
+      footer: footerButtons(confirmActions(pendingId, "ยกเลิกบิล")),
     }),
   );
 }

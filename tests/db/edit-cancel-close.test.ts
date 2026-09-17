@@ -115,11 +115,11 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
     expect(messageTexts(collected[0]!.messages)).toContain("แก้ไขอะไร");
 
-    await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "จำนวนคอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "2 คอร์ท"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("1 → 2 คอร์ท");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยืนยัน"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("แก้ไขรอบเรียบร้อย");
 
     const rows = await sql`SELECT court_count, max_players FROM games WHERE line_group_id = ${GROUP_ID}`;
@@ -134,11 +134,11 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "⏰ เวลา"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "เวลา"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "20:00"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("19:00 → 20:00");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยืนยัน"), owner.lineUserId), context);
 
     const rows = await sql`
       SELECT to_char(start_time, 'HH24:MI') AS start_time FROM games WHERE line_group_id = ${GROUP_ID}
@@ -159,7 +159,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "จำนวนคอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "1 คอร์ท"), owner.lineUserId), context);
 
     const reply = messageTexts(collected.at(-1)!.messages);
@@ -178,11 +178,11 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "👥 จำนวนคน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "จำนวนคน"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "12 คน"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("รับ 16 → 12 คน");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยืนยัน"), owner.lineUserId), context);
 
     const rows = await sql`SELECT max_players, court_count FROM games WHERE line_group_id = ${GROUP_ID}`;
     expect(rows[0]).toMatchObject({ max_players: 12, court_count: 2 });
@@ -201,7 +201,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "👥 จำนวนคน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "จำนวนคน"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "12 คน"), owner.lineUserId), context);
 
     const reply = messageTexts(collected.at(-1)!.messages);
@@ -220,13 +220,13 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "🏟️ ชื่อคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ชื่อคอร์ท"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("คอร์ทไหน");
 
     await handleEvent(textEvent("คอร์ทใหม่เอี่ยม", owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("คอร์ทใหม่เอี่ยม");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยืนยัน"), owner.lineUserId), context);
 
     const rows = await sql`SELECT court_name FROM games WHERE line_group_id = ${GROUP_ID}`;
     expect(rows[0]).toMatchObject({ court_name: "คอร์ทใหม่เอี่ยม" });
@@ -240,13 +240,13 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "💸 พร้อมเพย์"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "พร้อมเพย์"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("พร้อมเพย์");
 
     await handleEvent(textEvent("081-234-5678", owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("081-234-5678");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยืนยัน"), owner.lineUserId), context);
 
     const rows = await sql`SELECT promptpay FROM games WHERE line_group_id = ${GROUP_ID}`;
     expect(rows[0]).toMatchObject({ promptpay: "0812345678" });
@@ -260,7 +260,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "💸 พร้อมเพย์"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "พร้อมเพย์"), owner.lineUserId), context);
     await handleEvent(textEvent("08123456", owner.lineUserId), context);
 
     expect(messageTexts(collected.at(-1)!.messages)).toContain("10 หลัก");
@@ -278,9 +278,9 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
 
     async function editCourtCount(count: string): Promise<void> {
       await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-      await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
+      await handleEvent(postbackEvent(actionData(collected, "จำนวนคอร์ท"), owner.lineUserId), context);
       await handleEvent(postbackEvent(actionData(collected, count), owner.lineUserId), context);
-      await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+      await handleEvent(postbackEvent(actionData(collected, "ยืนยัน"), owner.lineUserId), context);
     }
 
     await editCourtCount("2 คอร์ท");
@@ -324,7 +324,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     await handleEvent(textEvent("บอทจ๋า ยกเลิก", owner.lineUserId), context);
     expect(messageTexts(collected[0]!.messages)).toContain("ยกเลิกรอบตีนี้?");
 
-    await handleEvent(postbackEvent(actionData(collected, "❌ ยืนยันยกเลิก"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยืนยันยกเลิก"), owner.lineUserId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกรอบตีเรียบร้อย");
 
     const rows = await sql`SELECT status FROM games WHERE line_group_id = ${GROUP_ID}`;
@@ -344,7 +344,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "✅ ปิดรอบ"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ปิดรอบ"), owner.lineUserId), context);
 
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ปิดรอบเรียบร้อย");
     const rows = await sql`SELECT status FROM games WHERE line_group_id = ${GROUP_ID}`;
@@ -373,11 +373,11 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     // ขอปิดรอบสองครั้ง ได้การ์ดสองใบของรอบเดียวกัน
     const first: Collected[] = [];
     await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.lineUserId), contextFor(first));
-    const staleConfirm = actionData(first, "✅ ปิดรอบ");
+    const staleConfirm = actionData(first, "ปิดรอบ");
 
     const second: Collected[] = [];
     await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.lineUserId), contextFor(second));
-    await handleEvent(postbackEvent(actionData(second, "✅ ปิดรอบ"), owner.lineUserId), contextFor(second));
+    await handleEvent(postbackEvent(actionData(second, "ปิดรอบ"), owner.lineUserId), contextFor(second));
 
     // เปิดรอบใหม่ แล้วเผลอกดการ์ดใบเก่าที่ยังค้างอยู่
     const newGame = await openGame(owner.user.id, 1);
@@ -400,9 +400,9 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "จำนวนคอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "3 คอร์ท"), owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยืนยัน"), owner.lineUserId), context);
 
     const rows = await sql`SELECT court_count, max_players FROM games WHERE line_group_id = ${GROUP_ID}`;
     expect(rows[0]).toMatchObject({ court_count: 3, max_players: 30 });
@@ -416,12 +416,12 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "🏸 จำนวนคอร์ท"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "จำนวนคอร์ท"), owner.lineUserId), context);
     await handleEvent(postbackEvent(actionData(collected, "3 คอร์ท"), owner.lineUserId), context);
 
     expect(messageTexts(collected.at(-1)!.messages)).toContain("รับ 16 → 24 คน");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ยืนยัน"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยืนยัน"), owner.lineUserId), context);
     const rows = await sql`SELECT court_count, max_players FROM games WHERE line_group_id = ${GROUP_ID}`;
     expect(rows[0]).toMatchObject({ court_count: 3, max_players: 24 });
   });
@@ -438,7 +438,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     await saveSessionMessages(GROUP_ID, owner.lineUserId, [{ role: "user", text: "ปิดรอบให้หน่อย" }], sql);
     expect(await loadSessionMessages(GROUP_ID, owner.lineUserId, sql)).toHaveLength(1);
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ปิดรอบ"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "ปิดรอบ"), owner.lineUserId), context);
 
     expect(await loadSessionMessages(GROUP_ID, owner.lineUserId, sql)).toEqual([]);
   });
@@ -460,7 +460,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const context = contextFor(collected);
 
     await handleEvent(textEvent("บอทจ๋า แก้ไข", owner.lineUserId), context);
-    await handleEvent(postbackEvent(actionData(collected, "📅 วันที่"), owner.lineUserId), context);
+    await handleEvent(postbackEvent(actionData(collected, "วันที่"), owner.lineUserId), context);
     await handleEvent(
       postbackEvent(actionData(collected, "เลือกวัน"), owner.lineUserId, { date: "2020-01-01" }),
       context,

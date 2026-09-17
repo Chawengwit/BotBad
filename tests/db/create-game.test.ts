@@ -135,7 +135,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     expect(confirmText).toContain("รับ 16 คน");
     expect(confirmText).toContain("พร้อมเพย์ 081-234-5678");
 
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "เปิดตี"), userId), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("0/16 คน");
 
     const games = await sql`
@@ -164,7 +164,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await handleEvent(textEvent("คอร์ทลุงหมี", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "เปิดตี"), userId), context);
 
     const games = await sql`
       SELECT court_count, max_players, court_name, location_url, promptpay
@@ -188,7 +188,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await handleEvent(textEvent("คอร์ทริมน้ำ", userId), context);
     await handleEvent(locationEvent(userId, 13.7563, 100.5018), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "เปิดตี"), userId), context);
 
     const games = await sql<{ location_url: string }[]>`
       SELECT location_url FROM games WHERE line_group_id = ${GROUP_ID}
@@ -239,7 +239,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await handleEvent(textEvent("คอร์ทแรก", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "✅ เปิดตี"), userId), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "เปิดตี"), userId), context);
 
     const second: Collected[] = [];
     await handleEvent(textEvent("บอทจ๋า เปิดตี", userId), makeContext(second));
@@ -271,7 +271,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await handleEvent(textEvent("คอร์ทเดิม", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
-    const confirmData = actionData(collected.at(-1)!.messages, "✅ เปิดตี");
+    const confirmData = actionData(collected.at(-1)!.messages, "เปิดตี");
 
     await handleEvent(postbackEvent(confirmData, userId), context);
     const again: Collected[] = [];
@@ -290,7 +290,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await handleEvent(textEvent("คอร์ทหมดอายุ", userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
-    const confirmData = actionData(collected.at(-1)!.messages, "✅ เปิดตี");
+    const confirmData = actionData(collected.at(-1)!.messages, "เปิดตี");
 
     await sql`UPDATE pending_actions SET expires_at = now() - interval '1 minute' WHERE line_group_id = ${GROUP_ID}`;
 
@@ -338,7 +338,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
     await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
 
-    const confirmData = actionData(collected.at(-1)!.messages, "✅ เปิดตี");
+    const confirmData = actionData(collected.at(-1)!.messages, "เปิดตี");
     const result: Collected[] = [];
     await handleEvent(postbackEvent(confirmData, userId), makeContext(result));
 

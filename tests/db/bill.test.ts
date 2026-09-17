@@ -299,18 +299,18 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await handleEvent(textEvent("25 บาท", owner.line_user_id), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("มีค่าอื่นอีกไหม");
 
-    await handleEvent(postbackEvent(actionData(collected, "💧 ค่าน้ำ"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ค่าน้ำ"), owner.line_user_id), context);
     await handleEvent(textEvent("50", owner.line_user_id), context);
 
-    await handleEvent(postbackEvent(actionData(collected, "➕ อื่น ๆ"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "อื่น ๆ"), owner.line_user_id), context);
     await handleEvent(textEvent("ค่าเช่าไม้ 100", owner.line_user_id), context);
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ไม่มีแล้ว"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ไม่มีแล้ว"), owner.line_user_id), context);
     const confirmText = messageTexts(collected.at(-1)!.messages);
     expect(confirmText).toContain("รวม 600.00");
     expect(confirmText).toContain("หาร 4 คน → คนละ 150.00");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ส่งบิล"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ส่งบิล"), owner.line_user_id), context);
     const cardText = messageTexts(collected.at(-1)!.messages);
     expect(cardText).toContain("คิดเงินแล้ว");
     expect(cardText).toContain("พร้อมเพย์ 081-234-5678");
@@ -341,8 +341,8 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await handleEvent(postbackEvent(actionData(collected, "ไม่มีค่าคอร์ท"), owner.line_user_id), context);
     await handleEvent(postbackEvent(actionData(collected, "1 ลูก"), owner.line_user_id), context);
     await handleEvent(postbackEvent(actionData(collected, "25"), owner.line_user_id), context);
-    await handleEvent(postbackEvent(actionData(collected, "✅ ไม่มีแล้ว"), owner.line_user_id), context);
-    await handleEvent(postbackEvent(actionData(collected, "✅ ส่งบิล"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ไม่มีแล้ว"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ส่งบิล"), owner.line_user_id), context);
 
     const stored = await getBill(GROUP_ID);
     expect(stored.bill.items.map((item) => item.label)).toEqual(["ลูกแบด"]);
@@ -371,7 +371,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await handleEvent(textEvent("บอทจ๋า ยกเลิกบิล", owner.line_user_id), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลรอบนี้?");
 
-    await handleEvent(postbackEvent(actionData(collected, "🗑️ ยกเลิกบิล"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ยกเลิกบิล"), owner.line_user_id), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลแล้ว");
 
     expect(await errorCode(() => getBill(GROUP_ID))).toBe("NO_BILL");
@@ -391,7 +391,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     expect(confirmText).toContain("ยังมีคนไม่จ่าย 2 คน");
     expect(confirmText).toContain("รวม 200.00");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ปิดรอบ"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ปิดรอบ"), owner.line_user_id), context);
     const closedText = messageTexts(collected.at(-1)!.messages);
     expect(closedText).toContain("ปิดรอบเรียบร้อย");
     expect(closedText).toContain("ยังค้างอยู่ 2 คน");
@@ -410,7 +410,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await handleEvent(textEvent("บอทจ๋า ปิดรอบ", owner.line_user_id), context);
     expect(messageTexts(collected.at(-1)!.messages)).not.toContain("ยังมีคนไม่จ่าย");
 
-    await handleEvent(postbackEvent(actionData(collected, "✅ ปิดรอบ"), owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "ปิดรอบ"), owner.line_user_id), context);
     const closedText = messageTexts(collected.at(-1)!.messages);
     expect(closedText).toContain("ปิดรอบเรียบร้อย");
     expect(closedText).not.toContain("ยังค้างอยู่");

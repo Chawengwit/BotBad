@@ -100,8 +100,8 @@ describe("ปุ่มที่บอทส่งออกไป", () => {
     expect(body).toContain("รับ 8 คน");
 
     // การ์ดยืนยันเป็น Flex แล้ว ปุ่มอยู่ที่ footer ไม่ติดเพดาน 160 ตัวอักษรอีก
-    expect(parsePostbackData(buttonData([message], "✅ เปิดตี") ?? "")?.action).toBe("confirm");
-    expect(parsePostbackData(buttonData([message], "❌ ยกเลิก") ?? "")?.action).toBe("reject");
+    expect(parsePostbackData(buttonData([message], "เปิดตี") ?? "")?.action).toBe("confirm");
+    expect(parsePostbackData(buttonData([message], "ยกเลิก") ?? "")?.action).toBe("reject");
   });
 });
 
