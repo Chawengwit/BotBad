@@ -50,17 +50,21 @@ type UnpaidRow = {
   unpaid_total_satang: number;
 };
 
-/** บิลที่ส่งไปแล้วและยังมีคนไม่จ่าย นับรวมทั้งกลุ่ม ไม่แยกเป็นรายคน */
+/**
+ * บิลที่ส่งไปแล้วและยังมีคนไม่จ่าย นับรวมทั้งกลุ่ม ไม่แยกเป็นรายคน
+ *
+ * อ่านกลุ่มจาก bills.line_group_id ตรง ๆ ไม่ใช่ join ผ่าน games
+ * เพราะบิลลอย ๆ ไม่มี game_id ถ้า join จะตกหล่นไปทั้งใบ
+ */
 async function listUnpaidBills(sql: Queryable): Promise<UnpaidRow[]> {
   return sql<UnpaidRow[]>`
-    SELECT g.line_group_id,
+    SELECT b.line_group_id,
            COUNT(DISTINCT b.id)::int AS bill_count,
            COALESCE(SUM(bs.amount_satang), 0)::int AS unpaid_total_satang
     FROM bills b
-    JOIN games g ON g.id = b.game_id
     JOIN bill_shares bs ON bs.bill_id = b.id AND bs.paid = false
     WHERE b.status = 'sent'
-    GROUP BY g.line_group_id
+    GROUP BY b.line_group_id
   `;
 }
 
@@ -68,7 +72,11 @@ async function listUnpaidBills(sql: Queryable): Promise<UnpaidRow[]> {
 export async function collectDigestData(
   sql: Queryable = getSql(),
 ): Promise<GroupDigestData[]> {
-  const [games, unpaid] = await Promise.all([listOpenGames(sql), listUnpaidBills(sql)]);
+  // อ่านทีละ query ไม่ใช้ Promise.all
+  // pool ตั้ง max: 1 อยู่แล้ว สอง query จึงวิ่งบน connection เดียวกันและถูก serialize อยู่ดี
+  // Promise.all ให้แค่ pipelining ที่ไม่ได้ประโยชน์ แลกกับความเปราะ (งานนี้ทำสัปดาห์ละครั้ง)
+  const games = await listOpenGames(sql);
+  const unpaid = await listUnpaidBills(sql);
 
   const byGroup = new Map<string, GroupDigestData>();
   const ensure = (lineGroupId: string): GroupDigestData => {
