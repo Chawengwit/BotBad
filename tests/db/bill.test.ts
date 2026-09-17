@@ -389,7 +389,9 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     // การ์ดต้องบอกด้วยว่าโอนให้ใคร ไม่ใช่มีแต่ตัวเลข (PRP §5.2.1)
     expect(cardText).toContain("โอนให้ เชวง");
     expect(cardText).toContain("081-234-5678");
-    expect(cardText).toContain("ยังไม่จ่าย 4 คน");
+    // การ์ดขึ้นเฉพาะคนที่ยังไม่จ่าย พร้อมยอดที่ยังไม่ได้รับ
+    expect(cardText).toContain("ยังไม่จ่าย");
+    expect(cardText).toContain("ยังไม่ได้รับ 600.00");
 
     // 400 + (2 x 25) + 50 + 100 = 600 บาท
     const stored = await getBill(GROUP_ID);

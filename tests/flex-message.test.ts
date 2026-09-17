@@ -13,7 +13,7 @@ import {
   unpaidList,
 } from "@/line/messages";
 import type { BillRow, BillShareRow, GameRow } from "@/repositories/types";
-import { makeBill, makeItem, makeShare } from "./helpers";
+import { makeBill, makeItem, makeShare, messageText } from "./helpers";
 
 const PENDING_ID = "11111111-1111-4111-8111-111111111111";
 /** altText ของ LINE ยาวได้ไม่เกิน 400 ตัวอักษร */
@@ -171,5 +171,56 @@ describe("โครงสร้าง Flex ถูกกติกาของ LIN
       (node) => node.type === "text" && node.action?.type === "uri",
     );
     expect(linked).toBeDefined();
+  });
+});
+
+/**
+ * การ์ดบิลขึ้นเฉพาะคนที่ยังไม่จ่าย
+ * ก๊วนใหญ่ 20-30 คน ถ้าไล่ทุกชื่อทุกครั้งการ์ดจะยาวจนคนเลิกอ่าน
+ * และคนที่จ่ายไปแล้วก็ไม่ได้ต้องทำอะไรต่อ
+ */
+describe("การ์ดบิลขึ้นเฉพาะคนที่ยังไม่จ่าย", () => {
+  const four = [
+    share("1", "เชวง", true),
+    share("2", "Bank", true),
+    share("3", "Arm", false),
+    share("4", "ฮก", false),
+  ];
+
+  it("คนที่จ่ายแล้วไม่ขึ้นเป็นรายบรรทัด แต่บอกจำนวนไว้", () => {
+    const body = messageText(billCard(bill, items, four));
+
+    expect(body).toContain("Arm");
+    expect(body).toContain("ฮก");
+    expect(body).not.toContain("เชวง 350.00");
+    expect(body).not.toContain("Bank 350.00");
+    expect(body).toContain("จ่ายแล้ว 2 คน");
+  });
+
+  it("บอกยอดที่ยังไม่ได้รับ ไม่ใช่แค่จำนวนคน", () => {
+    expect(messageText(billCard(bill, items, four))).toContain("ยังไม่ได้รับ 700.00");
+  });
+
+  it("ตอนเพิ่งส่งบิล ยังไม่มีใครจ่าย จึงขึ้นครบทุกคน", () => {
+    const body = messageText(billCard(bill, items, [share("1", "เชวง", false), share("2", "Bank", false)]));
+
+    expect(body).toContain("เชวง");
+    expect(body).toContain("Bank");
+    expect(body).not.toContain("จ่ายแล้ว");
+  });
+
+  it("จ่ายครบแล้วไม่มีรายชื่อเลย เหลือแค่บรรทัดสรุป", () => {
+    const body = messageText(billCard(bill, items, allPaid));
+
+    expect(body).toContain("จ่ายครบทุกคนแล้ว");
+    expect(body).not.toContain("ยังไม่จ่าย");
+  });
+
+  it("การ์ดยืนยันก่อนส่งยังขึ้นครบทุกคน เพราะเป็นขั้นตรวจก่อนกด", () => {
+    const body = messageText(confirmBill(PENDING_ID, "รอบ พุธ 16 ก.ย.", items, 70000, four));
+
+    for (const name of ["เชวง", "Bank", "Arm", "ฮก"]) {
+      expect(body, name).toContain(name);
+    }
   });
 });

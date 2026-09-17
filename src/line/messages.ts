@@ -852,16 +852,30 @@ function billBody(
 
 /** ยอดของแต่ละคน พร้อมสถานะจ่าย และคนที่จ่ายแทนถ้ามี */
 function shareRows(shares: BillShareRow[]): FlexComponent[] {
-  return shares.map((share) =>
-    amountRow(
-      `${share.paid ? "✅" : "⭕"} ${share.display_name}${
-        share.paid && share.paid_by_name && share.paid_by_name !== share.display_name
-          ? ` (${share.paid_by_name} จ่ายให้)`
-          : ""
-      }`,
-      formatBaht(share.amount_satang),
+  return shares.map((share) => amountRow(share.display_name, formatBaht(share.amount_satang)));
+}
+
+/**
+ * ยอดของคนที่ยังไม่จ่าย พร้อมบรรทัดสรุปว่าจ่ายไปแล้วกี่คน
+ *
+ * การ์ดบิลขึ้นเฉพาะคนที่ยังค้าง เพราะก๊วนใหญ่ 20-30 คนแล้วไล่ทุกชื่อทุกครั้ง
+ * การ์ดจะยาวจนคนเลิกอ่าน และคนที่จ่ายไปแล้วก็ไม่ได้ต้องทำอะไรต่อ
+ * อยากเห็นรายชื่อคนจ่ายแล้วใช้ "บอทจ๋า ใครยังไม่จ่าย" ซึ่งแยกสองกลุ่มให้ครบ
+ */
+function outstandingRows(shares: BillShareRow[]): FlexComponent[] {
+  const { paid, unpaid, settled } = summarize(shares);
+  if (settled) return [];
+
+  return [
+    vbox(
+      [
+        { type: "text", text: "⭕ ยังไม่จ่าย", size: "sm", weight: "bold", color: COLOR.warn },
+        ...shareRows(unpaid),
+        ...(paid.length > 0 ? [note(`✅ จ่ายแล้ว ${paid.length} คน`, COLOR.accent)] : []),
+      ],
+      { spacing: "sm", margin: "lg" },
     ),
-  );
+  ];
 }
 
 export function confirmBill(
@@ -895,7 +909,7 @@ export function billCard(
   shares: BillShareRow[],
   headline?: string,
 ): FlexMessage {
-  const { unpaid, settled } = summarize(shares);
+  const { unpaidTotalSatang, settled } = summarize(shares);
 
   return flexMessage(
     headline ?? `บิล ${bill.title}`,
@@ -904,17 +918,18 @@ export function billCard(
       body: vbox(
         [
           ...billBody(bill.title, items, bill.total_satang, shares),
-          separator("lg"),
-          vbox(shareRows(shares), { spacing: "sm", margin: "lg" }),
+          // จ่ายครบแล้วไม่มีรายชื่อให้ขึ้น จะได้ไม่เหลือเส้นคั่นสองเส้นติดกัน
+          ...(settled ? [] : [separator("lg"), ...outstandingRows(shares)]),
           separator("lg"),
           vbox(
             [
               ...(bill.promptpay
                 ? [infoRow("💸", `โอนให้ ${creatorName(shares, bill)} · ${formatPromptPay(bill.promptpay)}`)]
                 : []),
+              // ใช้ 💰 ไม่ใช่ ⭕ เพราะ ⭕ ถูกใช้เป็นหัวรายชื่อคนค้างไปแล้วข้างบน
               infoRow(
-                settled ? "✅" : "⭕",
-                settled ? "จ่ายครบทุกคนแล้ว" : `ยังไม่จ่าย ${unpaid.length} คน`,
+                settled ? "✅" : "💰",
+                settled ? "จ่ายครบทุกคนแล้ว" : `ยังไม่ได้รับ ${formatBaht(unpaidTotalSatang)}`,
               ),
             ],
             { spacing: "sm", margin: "lg" },
