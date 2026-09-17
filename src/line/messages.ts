@@ -245,10 +245,10 @@ function confirmActions(
 
 export function confirmCreateGame(pendingId: string, draft: GameDraft): ButtonsMessage {
   const summary = [
-    `🏸 ${draft.court_name}`,
+    `🏟️ ${draft.court_name}`,
     `📅 ${formatThaiDate(draft.play_date)}`,
     `⏰ ${formatTimeRange(draft.start_time, draft.duration_minutes)}`,
-    `🏟️ ${draft.court_count} คอร์ท · 👥 รับ ${draft.max_players} คน`,
+    `🏸 ${draft.court_count} คอร์ท · 👥 รับ ${draft.max_players} คน`,
     ...(draft.location_url ? ["📍 มีลิงก์แผนที่"] : []),
     ...(draft.promptpay ? [`💸 พร้อมเพย์ ${formatPromptPay(draft.promptpay)}`] : []),
     "",
@@ -258,25 +258,44 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): ButtonsM
   return buttons("ยืนยันเปิดรอบตี?", summary, confirmActions(pendingId, "✅ เปิดตี"));
 }
 
-const GAME_ACTIONS: MessageAction[] = [
-  { type: "postback", label: "🙋 ลงชื่อ", displayText: "ลงชื่อ", data: "action=join" },
-  { type: "postback", label: "❌ ถอนชื่อ", displayText: "ถอนชื่อ", data: "action=leave" },
-  { type: "postback", label: "👀 รายชื่อ", displayText: "ใครตีบ้าง", data: "action=list" },
-];
+/**
+ * การ์ดรอบตี — ข้อความล้วน ไม่มีปุ่ม (spec §23)
+ * LINE แก้ข้อความที่ส่งไปแล้วไม่ได้ ทุกครั้งที่มีความเคลื่อนไหวจึงส่งการ์ดใบใหม่
+ *
+ * ไม่ใช้ buttons template แล้ว เลยไม่ติดเพดาน 160 ตัวอักษร
+ * จึงแสดงชื่อคอร์ทคู่กับหัวข้อ และใส่ลิงก์แผนที่ไปด้วยได้
+ */
+export function gameCard(game: GameRow, joinedCount: number, headline?: string): TextMessage {
+  return text(
+    [
+      ...(headline ? [headline, ""] : []),
+      `🏟️ ${game.court_name ?? "BADMINTON"}`,
+      `📅 ${formatThaiDate(game.play_date)}`,
+      `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
+      `🏸 ${game.court_count} คอร์ท · 👥 ${joinedCount}/${game.max_players} คน`,
+      ...(game.location_url ? [`📍 ${game.location_url}`] : []),
+    ].join("\n"),
+  );
+}
 
 /**
- * การ์ดรอบตีพร้อมปุ่ม
- * LINE แก้ข้อความที่ส่งไปแล้วไม่ได้ ทุกครั้งที่มีความเคลื่อนไหวจึงส่งการ์ดใบใหม่
+ * ลงชื่อ / ถอนชื่อเป็นงานที่จบในตัว ตอบสั้น ๆ พอ ไม่ต้องมีปุ่มให้กดต่อ (spec §23)
+ * ใครจะลงเพิ่มหรือถอนก็พิมพ์สั่งเองได้ ไม่ต้องให้บอทยัดปุ่มใส่กลุ่มทุกครั้งที่มีคนขยับ
  */
-export function gameCard(game: GameRow, joinedCount: number, headline?: string): ButtonsMessage {
-  const body = [
-    headline ?? `🏸 ${game.court_name ?? "BADMINTON"}`,
-    `📅 ${formatThaiDate(game.play_date)}`,
-    `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
-    `🏟️ ${game.court_count} คอร์ท · 👥 ${joinedCount}/${game.max_players} คน`,
-  ].join("\n");
+export function joinedNotice(
+  displayName: string,
+  joinedCount: number,
+  maxPlayers: number,
+): TextMessage {
+  return text(`✅ ${displayName} ลงชื่อแล้ว\n👥 ${joinedCount}/${maxPlayers} คน`);
+}
 
-  return buttons("รอบตีแบด", body, GAME_ACTIONS);
+export function leftNotice(
+  displayName: string,
+  joinedCount: number,
+  maxPlayers: number,
+): TextMessage {
+  return text(`👋 ${displayName} ถอนชื่อแล้ว\n👥 ${joinedCount}/${maxPlayers} คน`);
 }
 
 export function playerList(game: GameRow, players: { display_name: string }[]): TextMessage {
@@ -284,10 +303,10 @@ export function playerList(game: GameRow, players: { display_name: string }[]): 
 
   return text(
     [
-      `🏸 ${game.court_name ?? "BADMINTON"}`,
+      `🏟️ ${game.court_name ?? "BADMINTON"}`,
       `📅 ${formatThaiDate(game.play_date)}`,
       `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
-      `🏟️ ${game.court_count} คอร์ท`,
+      `🏸 ${game.court_count} คอร์ท`,
       ...(game.location_url ? [`📍 ${game.location_url}`] : []),
       "",
       `👥 ${players.length}/${game.max_players} คน`,
@@ -301,12 +320,12 @@ export function editMenu(pendingId: string): TextMessage {
   return quickReplyText(
     "✏️ ต้องการแก้ไขอะไร?",
     [
-      { label: "🏟️ จำนวนคอร์ท", value: "court" },
+      { label: "🏸 จำนวนคอร์ท", value: "court" },
       { label: "👥 จำนวนคน", value: "max" },
       { label: "📅 วันที่", value: "date" },
       { label: "⏰ เวลา", value: "time" },
       { label: "⏱️ ระยะเวลา", value: "duration" },
-      { label: "🏸 ชื่อคอร์ท", value: "name" },
+      { label: "🏟️ ชื่อคอร์ท", value: "name" },
       { label: "📍 แผนที่", value: "location" },
       { label: "💸 พร้อมเพย์", value: "promptpay" },
     ].map((choice) => ({
@@ -320,13 +339,13 @@ function changeLines(game: GameRow, patch: EditPatch): string[] {
   const lines: string[] = [];
 
   if (patch.court_count !== undefined) {
-    lines.push(`🏟️ ${game.court_count} → ${patch.court_count} คอร์ท`);
+    lines.push(`🏸 ${game.court_count} → ${patch.court_count} คอร์ท`);
   }
   if (patch.max_players !== undefined) {
     lines.push(`👥 รับ ${game.max_players} → ${patch.max_players} คน`);
   }
   if (patch.court_name !== undefined) {
-    lines.push(`🏸 ${game.court_name ?? "(ยังไม่ระบุ)"} → ${patch.court_name}`);
+    lines.push(`🏟️ ${game.court_name ?? "(ยังไม่ระบุ)"} → ${patch.court_name}`);
   }
   if (patch.location_url !== undefined) {
     lines.push("📍 อัปเดตลิงก์แผนที่");
@@ -559,15 +578,7 @@ export function confirmBill(
   );
 }
 
-const BILL_ACTIONS = [
-  { label: "💸 จ่ายแล้ว", data: "action=bill_paid" },
-  { label: "👀 ใครยังไม่จ่าย", data: "action=bill_status" },
-];
-
-/**
- * การ์ดบิล ใช้ข้อความ + quick reply ไม่ใช่ buttons template
- * เพราะ buttons template จำกัดข้อความไว้ 160 ตัวอักษร ซึ่งบิลหลายรายการเกินได้ง่าย
- */
+/** การ์ดบิล — ข้อความล้วน ใครจ่ายแล้วพิมพ์ "บอทจ๋า จ่ายแล้ว" เอง (spec §23) */
 export function billCard(
   game: GameRow,
   bill: BillRow,
@@ -576,7 +587,7 @@ export function billCard(
 ): TextMessage {
   const { unpaid, settled } = summarize(shares);
 
-  return quickReplyText(
+  return text(
     [
       ...(headline ? [headline, ""] : []),
       ...billLines(game, bill.items, bill.total_satang, shares.length),
@@ -584,7 +595,6 @@ export function billCard(
       "",
       settled ? "✅ จ่ายครบทุกคนแล้ว" : `⭕ ยังไม่จ่าย ${unpaid.length} คน`,
     ].join("\n"),
-    BILL_ACTIONS,
   );
 }
 
@@ -592,7 +602,7 @@ export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[])
   const { paid, unpaid, unpaidTotalSatang, settled } = summarize(shares);
   const names = (list: BillShareRow[]) => list.map((share) => share.display_name).join(", ");
 
-  return quickReplyText(
+  return text(
     [
       `💰 รอบ ${formatThaiDate(game.play_date)} — คนละ ${formatBaht(shares[0]?.amount_satang ?? 0)}`,
       "",
@@ -607,7 +617,6 @@ export function unpaidList(game: GameRow, bill: BillRow, shares: BillShareRow[])
             ...(game.promptpay ? [`💸 พร้อมเพย์ ${formatPromptPay(game.promptpay)}`] : []),
           ]),
     ].join("\n"),
-    settled ? [] : BILL_ACTIONS.slice(0, 1),
   );
 }
 
@@ -686,10 +695,10 @@ export function nagEdits(editCount: number): TextMessage {
 
 export function gameSummary(game: GameRow): string {
   return [
-    ...(game.court_name ? [`🏸 ${game.court_name}`] : []),
+    ...(game.court_name ? [`🏟️ ${game.court_name}`] : []),
     `📅 ${formatThaiDate(game.play_date)}`,
     `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
-    `🏟️ ${game.court_count} คอร์ท`,
+    `🏸 ${game.court_count} คอร์ท`,
   ].join("\n");
 }
 

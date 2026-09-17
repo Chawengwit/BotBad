@@ -8,7 +8,8 @@ import {
   confirmCloseGame,
   confirmCreateGame,
   confirmEditGame,
-  gameCard,
+  joinedNotice,
+  leftNotice,
   NAG_AFTER_CHANGES,
   nagFlipFlop,
   paymentRecorded,
@@ -109,14 +110,14 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
           max_players: game.max_players,
           players: players.map((player) => player.display_name),
         },
-        [playerList(game, players), gameCard(game, players.length, "ทำอะไรต่อดี?")],
+        [playerList(game, players)],
       );
     }
 
     case "join_game": {
       const { game, joinedCount, changeCount } = await joinGame(lineGroupId, user.id);
       return ok({ current_players: joinedCount, max_players: game.max_players, changed_mind: changeCount }, [
-        gameCard(game, joinedCount, `✅ ${user.display_name} ลงชื่อแล้ว`),
+        joinedNotice(user.display_name, joinedCount, game.max_players),
         ...(changeCount >= NAG_AFTER_CHANGES ? [nagFlipFlop(user.display_name, changeCount)] : []),
       ]);
     }
@@ -124,7 +125,7 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
     case "leave_game": {
       const { game, joinedCount, changeCount } = await leaveGame(lineGroupId, user.id);
       return ok({ current_players: joinedCount, max_players: game.max_players, changed_mind: changeCount }, [
-        gameCard(game, joinedCount, `👋 ${user.display_name} ถอนชื่อแล้ว`),
+        leftNotice(user.display_name, joinedCount, game.max_players),
         ...(changeCount >= NAG_AFTER_CHANGES ? [nagFlipFlop(user.display_name, changeCount)] : []),
       ]);
     }

@@ -1,5 +1,5 @@
 import type { LineMessage } from "@/lib/line";
-import { gameCard, NAG_AFTER_CHANGES, nagFlipFlop, playerList } from "@/line/messages";
+import { joinedNotice, leftNotice, NAG_AFTER_CHANGES, nagFlipFlop, playerList } from "@/line/messages";
 import type { UserRow } from "@/repositories/types";
 import { joinGame, leaveGame, listPlayers } from "@/services/player.service";
 
@@ -21,7 +21,7 @@ function withNag(
 export async function doJoin(lineGroupId: string, user: UserRow): Promise<LineMessage[]> {
   const { game, joinedCount, changeCount } = await joinGame(lineGroupId, user.id);
   return withNag(
-    [gameCard(game, joinedCount, `✅ ${user.display_name} ลงชื่อแล้ว`)],
+    [joinedNotice(user.display_name, joinedCount, game.max_players)],
     user.display_name,
     changeCount,
   );
@@ -30,13 +30,14 @@ export async function doJoin(lineGroupId: string, user: UserRow): Promise<LineMe
 export async function doLeave(lineGroupId: string, user: UserRow): Promise<LineMessage[]> {
   const { game, joinedCount, changeCount } = await leaveGame(lineGroupId, user.id);
   return withNag(
-    [gameCard(game, joinedCount, `👋 ${user.display_name} ถอนชื่อแล้ว`)],
+    [leftNotice(user.display_name, joinedCount, game.max_players)],
     user.display_name,
     changeCount,
   );
 }
 
+/** ขอรายชื่อก็ได้รายชื่อ ไม่ต้องแถการ์ดรอบตีซ้ำอีกใบ (spec §23) */
 export async function doList(lineGroupId: string): Promise<LineMessage[]> {
   const { game, players } = await listPlayers(lineGroupId);
-  return [playerList(game, players), gameCard(game, players.length, "ทำอะไรต่อดี?")];
+  return [playerList(game, players)];
 }

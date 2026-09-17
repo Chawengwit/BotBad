@@ -421,9 +421,14 @@ Tool Executor เก็บ UI ไว้ฝั่ง App ระหว่าง lo
 
 | Tool สำเร็จ | แนบ |
 |---|---|
-| `join_game` / `leave_game` | Quick Reply `[🙋 ลงชื่อ] [❌ ถอนชื่อ] [👀 รายชื่อ]` |
-| `list_players` | Game Card (Flex) |
+| `join_game` / `leave_game` | ข้อความสั้น `✅ เชวง ลงชื่อแล้ว` + จำนวนคนล่าสุด (ไม่มีปุ่ม) |
+| `list_players` | รายชื่อผู้เล่น (ไม่มีปุ่ม) |
+| `get_bill` | การ์ดบิล (ไม่มีปุ่ม) |
+| `mark_my_payment` | ข้อความยืนยันการบันทึก (ไม่มีปุ่ม) |
 | `propose_*` | การ์ดยืนยัน + ปุ่ม `confirm` / `reject` พร้อม `pending_id` |
+
+ทางปุ่ม-คำสั่ง (`src/router/`) กับทาง tool ต้องตอบเหมือนกันเสมอ
+มีแต่ `propose_*` ที่แนบปุ่มได้ เพราะเป็นการขอให้กดยืนยัน (spec §23)
 
 ลำดับ reply:
 
