@@ -203,7 +203,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const second = await billFor(owner, { court_fee: 200 });
     expect(second.bill.id).not.toBe(first.bill.id);
     expect(second.bill.title).not.toBe(first.bill.title);
-    expect(await sql`SELECT id FROM bills`).toHaveLength(2);
+    expect(await sql`SELECT id FROM bills WHERE line_group_id = ${GROUP_ID}`).toHaveLength(2);
   });
 
   it("ชื่อบิลซ้ำกับใบที่เปิดอยู่ไม่ได้", async () => {
@@ -433,7 +433,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     await handleEvent(textEvent("เท่าไหร่ก็ได้", owner.line_user_id), context);
 
     expect(messageTexts(collected.at(-1)!.messages)).toContain("พิมพ์เป็นตัวเลข");
-    expect(await sql`SELECT id FROM bills`).toHaveLength(0);
+    expect(await sql`SELECT id FROM bills WHERE line_group_id = ${GROUP_ID}`).toHaveLength(0);
   });
 
   it("ยกเลิกบิลผ่านคำสั่งแล้วคิดใหม่ได้", async () => {

@@ -163,6 +163,68 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
     expect(pending[0]).toMatchObject({ action_type: "create_bill" });
   });
 
+  it("สั่งให้เก็บบางรายการเฉพาะบางคนได้ ยอดรายคนจึงต่างกัน", async () => {
+    const owner = await newUser("เชวง");
+    await openGame(owner.user.id);
+    await joinGame(GROUP_ID, owner.user.id);
+
+    const bank = await newUser("Bank");
+    await joinGame(GROUP_ID, bank.user.id);
+    const arm = await newUser("Arm");
+    await joinGame(GROUP_ID, arm.user.id);
+
+    const messages = await run(
+      owner,
+      "คิดเงิน ค่าคอร์ท 300 ค่าน้ำ 60 เฉพาะเชวงกับ Bank",
+      fakeClient([
+        call("propose_create_bill", {
+          court_fee: 300,
+          other_items: [{ label: "ค่าน้ำ", amount: 60 }],
+          payers: [{ label: "ค่าน้ำ", names: ["เชวง", "Bank"] }],
+        }),
+        say("กดปุ่มยืนยันด้านล่างได้เลย"),
+      ]),
+    );
+
+    const text = messageTexts(messages);
+    // ค่าคอร์ทหาร 3 คน = 100 ส่วนค่าน้ำหารสองคน = 30 → เชวงกับ Bank คนละ 130, Arm 100
+    expect(text).toContain("130.00");
+    expect(text).toContain("100.00");
+  });
+
+  it("สั่งคิดเงินเรื่องที่ไม่ใช่ค่ารอบตี ได้บิลลอย ๆ ที่ไม่ผูกกับรอบ", async () => {
+    const owner = await newUser("เชวง");
+    const game = await openGame(owner.user.id);
+    await joinGame(GROUP_ID, owner.user.id);
+
+    const messages = await run(
+      owner,
+      "คิดค่ากินข้าว 300 เชวงกับกิ้ฟ",
+      fakeClient([
+        call("propose_create_bill", {
+          title: "ค่ากินข้าว",
+          other_items: [{ label: "ค่าข้าว", amount: 300 }],
+          payers: [{ label: "ค่าข้าว", names: ["เชวง", "กิ้ฟ"] }],
+        }),
+        say("กดปุ่มยืนยันด้านล่างได้เลย"),
+      ]),
+    );
+
+    expect(messageTexts(messages)).toContain("ค่ากินข้าว");
+    // ยังไม่ส่งบิลจริงจนกว่าจะกดยืนยัน และ pending ต้องไม่ผูกกับรอบ
+    expect(await sql`SELECT id FROM bills WHERE game_id = ${game.id}`).toHaveLength(0);
+    const pending = await sql<{ game_id: string | null }[]>`
+      SELECT game_id FROM pending_actions WHERE line_group_id = ${GROUP_ID}
+    `;
+    expect(pending[0]?.game_id).toBeNull();
+
+    // กิ้ฟ ที่ยังไม่รู้จัก ถูกเพิ่มเป็นแขกของกลุ่มให้เลย
+    const guests = await sql<{ display_name: string }[]>`
+      SELECT display_name FROM users WHERE line_group_id = ${GROUP_ID}
+    `;
+    expect(guests.map((guest) => guest.display_name)).toEqual(["กิ้ฟ"]);
+  });
+
   it("คนที่ไม่ได้เปิดรอบสั่งคิดเงินไม่ได้ และ LLM ได้รู้เหตุผล", async () => {
     const owner = await newUser("เชวง");
     await openGame(owner.user.id);
@@ -180,7 +242,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
     );
 
     expect(JSON.stringify(recorded)).toContain("NOT_GAME_CREATOR");
-    expect(await sql`SELECT id FROM bills`).toHaveLength(0);
+    expect(await sql`SELECT id FROM bills WHERE line_group_id = ${GROUP_ID}`).toHaveLength(0);
   });
 
   it("บอกว่าโอนแล้วผ่าน LLM บันทึกให้เจ้าตัวเท่านั้น", async () => {

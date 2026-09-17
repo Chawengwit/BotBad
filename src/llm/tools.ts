@@ -8,7 +8,7 @@ import {
   promptPaySchema,
 } from "@/services/game.service";
 import { DATE_PATTERN, TIME_PATTERN } from "@/lib/time";
-import { billDraftSchema } from "@/services/bill.service";
+import { billDraftSchema, ITEM_LABEL_MAX_LENGTH, MAX_OTHER_ITEMS } from "@/services/bill.service";
 import { MAX_NAMES_PER_COMMAND, MAX_NAME_LENGTH } from "@/services/people.service";
 
 /**
@@ -67,6 +67,29 @@ const peopleFields = {
     description:
       "ชื่อคนที่ทำรายการให้ ตามที่ผู้ใช้พิมพ์มาเป๊ะ ๆ ห้ามเดาหรือแต่งชื่อเอง " +
       "ใส่เฉพาะชื่อที่ผู้ใช้เอ่ยถึงจริง ไม่ต้องใส่ชื่อผู้ใช้เองเว้นแต่เขาระบุมาด้วย",
+  },
+};
+
+const billPayersField = {
+  payers: {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        label: {
+          type: Type.STRING,
+          description: 'ชื่อรายการที่เก็บบางคน ต้องตรงกับชื่อรายการที่ส่งมา เช่น "ค่าน้ำ" หรือ "ค่าคอร์ท"',
+        },
+        names: {
+          type: Type.ARRAY,
+          items: { type: Type.STRING },
+          description: "ชื่อคนที่ร่วมจ่ายรายการนี้ ตามที่ผู้ใช้พิมพ์มาเป๊ะ ๆ",
+        },
+      },
+    },
+    description:
+      "ระบุเฉพาะรายการที่เก็บบางคน รายการที่ไม่อยู่ในนี้จะเก็บทุกคนในบิล " +
+      'เช่น "ค่าน้ำหารเฉพาะเชวงกับแบงค์" ส่ง [{ label: "ค่าน้ำ", names: ["เชวง", "แบงค์"] }]',
   },
 };
 
@@ -151,10 +174,13 @@ export const toolDeclarations: FunctionDeclaration[] = [
   {
     name: "propose_create_bill",
     description:
-      "เสนอคิดเงิน หารเท่ากันทุกคนที่อยู่ในบิล ยังไม่ส่งบิลจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน " +
+      "เสนอคิดเงิน ยังไม่ส่งบิลจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน " +
       "ไม่ส่ง title = คิดเงินค่ารอบตีที่เปิดอยู่ ใช้ได้เฉพาะคนที่เปิดรอบ " +
       "ส่ง title = บิลลอย ๆ ที่ไม่ผูกกับรอบ ใครในกลุ่มก็สร้างได้",
-    parameters: { type: Type.OBJECT, properties: { ...billFields, ...billTitleOnCreate } },
+    parameters: {
+      type: Type.OBJECT,
+      properties: { ...billFields, ...billTitleOnCreate, ...billPayersField },
+    },
   },
   {
     name: "mark_my_payment",
@@ -219,7 +245,23 @@ export const toolSchemas = {
   propose_cancel_game: noArgs,
   propose_close_game: noArgs,
   get_bill: z.object({ bill_title: z.string().trim().max(60) }).partial().strict(),
-  propose_create_bill: billDraftSchema.extend({ title: z.string().trim().max(60) }).partial().strict(),
+  propose_create_bill: billDraftSchema
+    .extend({
+      title: z.string().trim().max(60),
+      payers: z
+        .array(
+          z.object({
+            label: z.string().trim().min(1).max(ITEM_LABEL_MAX_LENGTH),
+            names: z
+              .array(z.string().trim().min(1).max(MAX_NAME_LENGTH))
+              .min(1)
+              .max(MAX_NAMES_PER_COMMAND),
+          }),
+        )
+        .max(MAX_OTHER_ITEMS + 2),
+    })
+    .partial()
+    .strict(),
   mark_my_payment: z
     .object({
       paid: z.boolean(),

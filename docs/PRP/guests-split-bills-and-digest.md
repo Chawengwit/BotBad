@@ -539,7 +539,7 @@ wizard คิดเงินต้องมีขั้นถามว่าร�
 | `join_game` | รับ `guests?: string[]` — ชื่อคนที่จะลงชื่อให้ |
 | `leave_game` | รับ `names?: string[]` |
 | `mark_my_payment` | รับ `names?: string[]`, `bill_title?: string` |
-| `propose_create_bill` | รับ `title?`, `items[]` ที่แต่ละตัวมี `payers?: string[]` |
+| `propose_create_bill` | รับ `title?` (บิลลอย ๆ) และ `payers?: [{ label, names[] }]` (รายการที่เก็บบางคน) |
 | `get_bill` | รับ `bill_title?` |
 
 ## 9.2 Rules ที่ต้องแก้

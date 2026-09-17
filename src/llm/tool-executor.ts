@@ -42,7 +42,7 @@ import {
 } from "@/services/bill.service";
 import { advanceBillWizard } from "@/router/wizard";
 import { joinGame, joinPeople, leaveGame, leavePeople, listPlayers } from "@/services/player.service";
-import { resolvePeople } from "@/services/people.service";
+import { resolveOrCreateGuests, resolvePeople } from "@/services/people.service";
 import { upsertGuest } from "@/repositories/user.repository";
 import { isToolName, toolSchemas, type ToolName } from "./tools";
 
@@ -292,6 +292,18 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
 
       const items = buildBillItems(draft);
 
+      // รายการที่เก็บบางคน ต้องแปลชื่อเป็นคนก่อน ชื่อที่ยังไม่รู้จักถือว่าเป็นแขก
+      // เพราะผู้ใช้กำลังบอกว่าใครกินใครใช้ ไม่ใช่เดาชื่อขึ้นมาเอง
+      const chosen = (args.payers as { label: string; names: string[] }[] | undefined) ?? [];
+      const itemPayers: Record<string, string[]> = {};
+      const payerNames: Record<string, string> = {};
+
+      for (const entry of chosen) {
+        const people = await resolveOrCreateGuests(lineGroupId, entry.names, user);
+        itemPayers[entry.label] = people.map((person) => person.id);
+        for (const person of people) payerNames[person.id] = person.display_name;
+      }
+
       // มาทาง LLM คือได้ข้อมูลครบในประโยคเดียว ช่องที่ไม่ได้บอกมาให้เป็น null
       // (= ไม่มีรายการนี้) ไม่ใช่ undefined ซึ่งจะทำให้ wizard ย้อนไปถามใหม่
       const preview = await advanceBillWizard(pending, {
@@ -299,6 +311,7 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
         shuttle_count: draft.shuttle_count ?? null,
         shuttle_price: draft.shuttle_price ?? null,
         ...(draft.other_items ? { other_items: draft.other_items } : {}),
+        ...(chosen.length > 0 ? { item_payers: itemPayers, payer_names: payerNames } : {}),
         extras_done: true,
       });
 
