@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { isSmallTalk, isStopWord } from "@/router/listening";
 import { buildSystemPrompt, IGNORE_SENTINEL, isIgnoreReply } from "@/llm/system-prompt";
-import { keepsConversationOpen, RULE_COMMANDS } from "@/router/rule-commands";
+import * as ruleCommands from "@/router/rule-commands";
+import { parseCommand, RULE_COMMANDS } from "@/router/rule-commands";
 
 describe("isStopWord", () => {
   it.each(["พอแล้ว", "พอ", "จบ", "จบแล้ว", "ขอบคุณ", "ขอบคุณ!", "  ขอบใจ  ", "Thanks", "bye"])(
@@ -66,24 +67,20 @@ describe("system prompt", () => {
   });
 });
 
-describe("keepsConversationOpen", () => {
-  it.each(["เมนู", "ช่วยด้วย", "เปิดตี", "แก้ไข", "ยกเลิก", "ปิดรอบ", "คิดเงิน", "ยกเลิกบิล"] as const)(
-    "%s ยังคุยไม่จบ ต้องฟังต่อ",
-    (command) => {
-      expect(keepsConversationOpen(command)).toBe(true);
-    },
-  );
+/**
+ * โหมดฟังปิดเมื่อ "ไม่ได้คุยกับบอท" เท่านั้น ไม่ใช่เมื่อ "งานสำเร็จ" (spec §6)
+ * ของเดิมปิดทุกครั้งที่คำสั่งจบในตัว ซึ่งคือกรณีปกติที่สุด
+ * ผู้ใช้เลยต้องเรียก "บอทจ๋า" ใหม่แทบทุกประโยค
+ */
+describe("คำสั่งทุกตัวต่ออายุโหมดฟัง", () => {
+  it("ไม่มีคำสั่งไหนที่ถูกจัดว่า 'จบแล้วปิดโหมดฟัง' อีก", () => {
+    // ถ้ามีใครเอา keepsConversationOpen กลับมา เทสนี้จะพัง
+    expect(Object.keys(ruleCommands)).not.toContain("keepsConversationOpen");
+  });
 
-  it.each(["ลงชื่อ", "ถอนชื่อ", "ใครตีบ้าง", "รายชื่อ", "บิล", "ใครยังไม่จ่าย", "จ่ายแล้ว", "ยังไม่จ่าย"] as const)(
-    "%s จบในตัว ปิดโหมดฟังได้",
-    (command) => {
-      expect(keepsConversationOpen(command)).toBe(false);
-    },
-  );
-
-  it("ตัดสินได้ครบทุกคำสั่ง ไม่มีคำสั่งไหนหลุด", () => {
+  it("ทุกคำสั่งยังแยกออกจากข้อความทั่วไปได้", () => {
     for (const command of RULE_COMMANDS) {
-      expect(typeof keepsConversationOpen(command)).toBe("boolean");
+      expect(parseCommand(command)).toEqual({ command, args: "" });
     }
   });
 });

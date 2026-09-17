@@ -10,14 +10,15 @@ import {
   setListeningWindow,
 } from "@/repositories/session.repository";
 import type { LineMessage } from "@/lib/line";
+import type { LineUserRow } from "@/repositories/types";
 import { formatErrorForLog } from "@/lib/log";
 import { isSmallTalk, isStopWord } from "@/router/listening";
-import { handlePostback, parsePostbackData, type PostbackData } from "@/router/postback";
+import { handlePostback, parsePostbackData } from "@/router/postback";
 import {
   handleRuleCommand,
-  keepsConversationOpen,
   parseCommand,
   stripWakeWord,
+  type ParsedCommand,
 } from "@/router/rule-commands";
 import { handleTextAnswer } from "@/router/text-answer";
 import { hasWakeWord, WAKE_WORD } from "@/router/wake-word";
@@ -36,19 +37,6 @@ const MESSAGES = {
   groupOnly: "ℹ️ บอทนี้ใช้งานได้ใน LINE Group เท่านั้น",
   joinGroup: `🏸 สวัสดีครับ บอทจ๋ามาแล้ว!\n\nพิมพ์ "${WAKE_WORD} เปิดตี" เพื่อเปิดรอบตีได้เลย\nหรือเรียก "${WAKE_WORD}" เฉย ๆ แล้วค่อยบอกทีหลังก็ได้`,
 } as const;
-
-/**
- * ปุ่มที่กดแล้วเรื่องจบ ต้องปิดโหมดฟังทันที (spec §6)
- * ปุ่มอ่านข้อมูลอย่าง list / bill_status ไม่นับ เพราะยังอยู่ระหว่างคุยกันอยู่
- */
-const CLOSING_POSTBACKS: readonly PostbackData["action"][] = [
-  "confirm",
-  "reject",
-  "join",
-  "leave",
-  "bill_paid",
-  "bill_unpaid",
-];
 
 /**
  * ข้อความที่ไม่ได้เรียกบอทโดยตรง ถ้าพังต้องเงียบ
@@ -81,6 +69,37 @@ async function runOrExplain(
   }
 }
 
+/**
+ * ทำคำสั่งตรงตัว แล้วต่ออายุโหมดฟังเสมอ (spec §6)
+ *
+ * ต่ออายุแม้คำสั่งจะล้มเหลว เพราะคนที่เพิ่งโดนบอทบอกว่า "ยังไม่มีรอบที่เปิดอยู่"
+ * มักจะสั่งต่อทันที ถ้าปิดหน้าต่างตอนนั้นเขาต้องเรียกชื่อบอทใหม่ทั้งที่เพิ่งคุยกันอยู่
+ */
+async function runRuleCommand(
+  parsed: ParsedCommand,
+  groupId: string,
+  userId: string,
+  user: LineUserRow,
+  keepListening: boolean,
+): Promise<LineMessage[]> {
+  // ใช้คำสั่งตรงตัวแล้ว ถือว่าจบเรื่องเดิม ล้างบริบทที่คุยค้างไว้
+  await clearSession(groupId, userId).catch(() => {});
+
+  try {
+    return await handleRuleCommand({
+      command: parsed.command,
+      args: parsed.args,
+      lineGroupId: groupId,
+      user,
+    });
+  } catch (error) {
+    if (!isAppError(error)) throw error;
+    return [errorMessage(error.code, error.details)];
+  } finally {
+    await setListeningWindow(groupId, userId, keepListening).catch(() => {});
+  }
+}
+
 async function resolveMessages(
   event: LineEvent,
   context: EventContext,
@@ -106,9 +125,8 @@ async function resolveMessages(
       const user = await ensureUser(groupId, userId, context.accessToken);
       const messages = await handlePostback(parsed, { params, lineGroupId: groupId, user });
 
-      if (CLOSING_POSTBACKS.includes(parsed.action)) {
-        await closeListeningWindow(groupId, userId).catch(() => {});
-      }
+      // กดปุ่มคือกำลังคุยกับบอทอยู่ ต่ออายุโหมดฟังให้ ไม่ใช่ปล่อยหมดอายุกลางทาง
+      await openListeningWindow(groupId, userId).catch(() => {});
       return messages;
     }, context.accessToken);
   }
@@ -144,19 +162,7 @@ async function resolveMessages(
     if (parsed) {
       return runOrExplain(async () => {
         const user = await ensureUser(groupId, userId, context.accessToken);
-        // ใช้คำสั่งตรงตัวแล้ว ถือว่าจบเรื่องเดิม ล้างบริบทที่คุยค้างไว้
-        await clearSession(groupId, userId).catch(() => {});
-        const messages = await handleRuleCommand({
-          command: parsed.command,
-          args: parsed.args,
-          lineGroupId: groupId,
-          user,
-        });
-
-        // คำสั่งที่ตอบมาเป็นคำถามหรือการ์ดยืนยัน = ยังคุยกันไม่จบ ฟังต่อได้เลย
-        const keepListening = gemini !== null && keepsConversationOpen(parsed.command);
-        await setListeningWindow(groupId, userId, keepListening).catch(() => {});
-        return messages;
+        return runRuleCommand(parsed, groupId, userId, user, gemini !== null);
       }, context.accessToken);
     }
 
@@ -181,7 +187,7 @@ async function resolveMessages(
         client: createGeminiClient(),
       });
 
-      await setListeningWindow(groupId, userId, !reply.done).catch(() => {});
+      await setListeningWindow(groupId, userId, !reply.ignored).catch(() => {});
       return reply.messages;
     }, context.accessToken);
   }
@@ -218,6 +224,16 @@ async function resolveMessages(
     }
 
     const user = await ensureUser(groupId, userId, context.accessToken);
+
+    // อยู่ในโหมดฟังแล้วพิมพ์คำสั่งตรงตัว ต้องเข้า rule-based เหมือนมี wake word
+    // ไม่งั้น "ลงชื่อ" เฉย ๆ จะถูกส่งไปให้ Gemini ตีความทั้งที่รู้อยู่แล้วว่าแปลว่าอะไร
+    //
+    // คำสั่งตรงตัวถือว่าคุยกับบอทแน่นอน ผิดพลาดก็ต้องบอก ไม่ใช่เงียบแบบข้อความทั่วไป
+    const listeningCommand = parseCommand(messageText);
+    if (listeningCommand) {
+      return runRuleCommand(listeningCommand, groupId, userId, user, true);
+    }
+
     const reply = await runAgent({
       text: messageText,
       lineGroupId: groupId,
@@ -227,7 +243,7 @@ async function resolveMessages(
       listening: true,
     });
 
-    await setListeningWindow(groupId, userId, !reply.done);
+    await setListeningWindow(groupId, userId, !reply.ignored);
     return reply.messages.length > 0 ? reply.messages : null;
   }, context.accessToken);
 }

@@ -123,20 +123,42 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
       expect(currentClient.calls).toBe(0);
     });
 
-    it("คำสั่งที่จบในตัวไม่เปิดโหมดฟังค้างไว้", async () => {
+    /**
+     * เดิมคำสั่งที่ "จบในตัว" ปิดโหมดฟังทันที ซึ่งคือกรณีปกติที่สุด
+     * ผู้ใช้เลยต้องเรียก "บอทจ๋า" ใหม่แทบทุกประโยค (spec §6)
+     */
+    it.each(["ใครตีบ้าง", "เปิดตี", "บิล", "เมนู"])(
+      "คำสั่ง %s ต่ออายุโหมดฟังไว้ให้",
+      async (command) => {
+        const lineUserId = newUserId();
+
+        await send(lineUserId, `บอทจ๋า ${command}`);
+
+        expect(await isListening(GROUP_ID, lineUserId)).toBe(true);
+      },
+    );
+
+    it("อยู่ในโหมดฟังแล้วพิมพ์คำสั่งตรงตัว ต้องเข้า rule-based ไม่เสียโควตา LLM", async () => {
       const lineUserId = newUserId();
       await openListeningWindow(GROUP_ID, lineUserId);
+      currentClient = fakeClient([say("ไม่ควรถูกเรียก")]);
 
-      await send(lineUserId, "บอทจ๋า ใครตีบ้าง");
+      const messages = await send(lineUserId, "ใครตีบ้าง");
 
-      expect(await isListening(GROUP_ID, lineUserId)).toBe(false);
+      expect(currentClient.calls).toBe(0);
+      expect(messages.length).toBeGreaterThan(0);
+      expect(await isListening(GROUP_ID, lineUserId)).toBe(true);
     });
 
-    it("คำสั่งที่ต้องคุยต่อ เปิดโหมดฟังไว้ให้", async () => {
+    it("สั่งต่อเนื่องหลายรอบโดยเรียกชื่อครั้งเดียว", async () => {
       const lineUserId = newUserId();
 
-      await send(lineUserId, "บอทจ๋า เปิดตี");
+      await send(lineUserId, "บอทจ๋า");
+      expect(await isListening(GROUP_ID, lineUserId)).toBe(true);
 
+      // ทั้งสองคำสั่งต้องทำงานโดยไม่ต้องมี wake word และยังฟังต่อ
+      expect((await send(lineUserId, "ใครตีบ้าง")).length).toBeGreaterThan(0);
+      expect((await send(lineUserId, "บิล")).length).toBeGreaterThan(0);
       expect(await isListening(GROUP_ID, lineUserId)).toBe(true);
     });
 
@@ -245,7 +267,12 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
       expect(await isListening(GROUP_ID, lineUserId)).toBe(false);
     });
 
-    it("ทำงานสำเร็จแล้วปิดโหมดฟังทันที", async () => {
+    /**
+     * เดิมโหมดฟังปิดทันทีที่ tool ทำงานสำเร็จ (join/leave/จ่ายเงิน)
+     * แต่คนที่เพิ่งลงชื่อเสร็จมักถามต่อว่า "ใครมาบ้าง" ทันที
+     * ปิดตรงนั้นคือบังคับให้เรียกชื่อบอทใหม่ทุกประโยค (spec §6)
+     */
+    it("ทำงานสำเร็จแล้วยังฟังต่อ ไม่ต้องเรียกชื่อใหม่", async () => {
       const lineUserId = newUserId();
       const game = await insertGame(
         {
@@ -271,7 +298,7 @@ describe.skipIf(!canRunDbTests())("โหมดฟัง (ฐานข้อม�
 
       await send(lineUserId, "ผมไปด้วยนะ");
 
-      expect(await isListening(GROUP_ID, lineUserId)).toBe(false);
+      expect(await isListening(GROUP_ID, lineUserId)).toBe(true);
     });
 
     it("ยังไม่จบเรื่อง เช่น ยังรอกดยืนยัน ต้องฟังต่อ", async () => {

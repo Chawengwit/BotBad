@@ -367,7 +367,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
 
     const messages = await run(user, "เอาไงดี", fakeClient([call("get_open_game")]));
 
-    expect(messageTexts(messages)).toContain("ลองเลือกคำสั่งด้านล่าง");
+    expect(messageTexts(messages)).toContain("ลองเลือกจากด้านล่าง");
   });
 
   it("ตอบไม่เกิน 5 ข้อความ แม้ tool จะสร้างการ์ดมาเยอะ", async () => {
@@ -408,7 +408,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
 
     const messages = await run(user, "เปิดตีหน่อย", fakeClient([new Error("503 quota exceeded")]));
 
-    expect(messageTexts(messages)).toContain("ลองเลือกคำสั่งด้านล่าง");
+    expect(messageTexts(messages)).toContain("ลองเลือกจากด้านล่าง");
   });
 
   it("ส่ง content ของ model กลับไปทั้งก้อน (thoughtSignature ของ Gemini 3)", async () => {

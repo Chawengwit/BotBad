@@ -204,7 +204,7 @@ export function askMaxPlayers(pendingId: string, courtCount: number): TextMessag
 }
 
 export function askCourtName(): TextMessage {
-  return text("🏟️ ไปตีที่คอร์ทไหน?\n\nพิมพ์ชื่อคอร์ทตอบได้เลย ไม่ต้องขึ้นต้นด้วย “บอทจ๋า”");
+  return text("🏟️ ไปตีที่คอร์ทไหนครับพี่?\n\nพิมพ์ชื่อคอร์ทตอบได้เลย");
 }
 
 /**
@@ -292,7 +292,7 @@ function commandShortcuts(commands: string[]): TextMessage["quickReply"] {
 export function fallbackMenu(): TextMessage {
   return {
     type: "text",
-    text: "🤔 ตอนนี้ผมยังไม่เข้าใจประโยคนี้\n\nลองเลือกคำสั่งด้านล่างได้เลย",
+    text: "🤔 ผมยังไม่เข้าใจประโยคนี้ครับพี่\n\nลองเลือกจากด้านล่างได้เลย",
     quickReply: commandShortcuts(["เปิดตี", "ลงชื่อ", "ถอนชื่อ", "ใครตีบ้าง"]),
   };
 }
@@ -304,7 +304,7 @@ export function fallbackMenu(): TextMessage {
 export function greeting(): TextMessage {
   return {
     type: "text",
-    text: "ว่าไงครับ 🏸\n\nพิมพ์บอกได้เลยว่าจะให้ทำอะไร ไม่ต้องขึ้นต้นด้วยชื่อผมแล้ว\nหรือกดปุ่มด้านล่างก็ได้",
+    text: "ว่าไงครับพี่ 🏸",
     quickReply: commandShortcuts(["เปิดตี", "ลงชื่อ", "ใครตีบ้าง", "คิดเงิน"]),
   };
 }
@@ -338,7 +338,7 @@ export function helpMenu(): TextMessage {
 
 /** ผู้ใช้บอกเองว่าจบแล้ว ปิดโหมดฟังทันทีไม่ต้องรอหมดเวลา */
 export function goodbye(): TextMessage {
-  return text("ได้เลยครับ 👋 เรียก \"บอทจ๋า\" ได้ใหม่ทุกเมื่อ");
+  return text("ได้เลยครับพี่ 👋 เรียก \"บอทจ๋า\" ได้ใหม่ทุกเมื่อ");
 }
 
 export function askAgain(message: string): TextMessage {
@@ -721,15 +721,15 @@ export function gameClosed(unpaid: BillShareRow[] = []): TextMessage {
 export function actionRejected(actionType: PendingActionType): TextMessage {
   switch (actionType) {
     case "create_game":
-      return text("ยกเลิกแล้ว ไม่ได้เปิดรอบตีนะ");
+      return text("ได้ครับพี่ ไม่ได้เปิดรอบตีนะ");
     case "edit_game":
-      return text("ไม่ได้แก้อะไร รอบตียังเหมือนเดิม");
+      return text("ได้ครับพี่ รอบตียังเหมือนเดิม");
     case "create_bill":
-      return text("ยกเลิกแล้ว ยังไม่ได้คิดเงินนะ");
+      return text("ได้ครับพี่ ยังไม่ได้คิดเงินนะ");
     case "cancel_bill":
-      return text("ไม่ได้ยกเลิกบิล บิลเดิมยังอยู่");
+      return text("ได้ครับพี่ บิลเดิมยังอยู่");
     default:
-      return text("ไม่ได้ทำอะไรต่อ รอบตียังเปิดอยู่เหมือนเดิม");
+      return text("ได้ครับพี่ รอบตียังเปิดอยู่เหมือนเดิม");
   }
 }
 
@@ -1029,19 +1029,26 @@ function refusedLines(refused: PaymentOutcome["refused"]): string[] {
   ];
 }
 
+/**
+ * ต้องขึ้นชื่อ "คนที่ถูกบันทึกว่าจ่าย" ไม่ใช่ชื่อคนสั่งเสมอไป
+ * พิมพ์ "วิท จ่ายแล้ว" แล้วขึ้นว่าคนสั่งจ่าย คืออ่านแล้วเข้าใจผิดว่าเงินมาจากใคร
+ */
 export function paymentRecorded(actorName: string, result: PaymentOutcome): TextMessage {
   const { unpaid, settled } = summarize(result.shares);
   const total = result.people.reduce((sum, entry) => sum + entry.amountSatang, 0);
   const names = result.people.map((entry) => entry.user.display_name);
   const others = names.filter((name) => name !== actorName);
+  const paidSelf = names.includes(actorName);
+
+  const headline = paidSelf
+    ? `✅ บันทึกแล้ว ${actorName} จ่าย ${formatBaht(total)}${
+        others.length > 0 ? ` (รวม ${others.join(", ")})` : ""
+      }`
+    : `✅ บันทึกแล้ว ${others.join(", ")} จ่าย ${formatBaht(total)} (${actorName} บันทึกให้)`;
 
   return text(
     [
-      names.length > 0
-        ? `✅ บันทึกแล้ว ${actorName} จ่าย ${formatBaht(total)}${
-            others.length > 0 ? ` (รวม ${others.join(", ")})` : ""
-          }`
-        : "ℹ️ ไม่มีอะไรถูกบันทึก",
+      names.length > 0 ? headline : "ℹ️ ยังไม่มีอะไรถูกบันทึกนะครับ",
       ...refusedLines(result.refused),
       settled ? "🎉 ครบทุกคนแล้ว" : `เหลืออีก ${unpaid.length} คน`,
     ].join("\n"),
@@ -1230,22 +1237,22 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
     case "NO_OPEN_GAME":
       return text('❌ ตอนนี้ไม่มีรอบตีที่เปิดอยู่\n\nพิมพ์ "บอทจ๋า เปิดตี" เพื่อเปิดรอบใหม่');
     case "ALREADY_JOINED":
-      return text("ℹ️ คุณลงชื่อรอบนี้ไปแล้ว");
+      return text("ℹ️ พี่ลงชื่อรอบนี้ไว้แล้วนะครับ");
     case "NOT_JOINED":
-      return text("ℹ️ คุณยังไม่ได้ลงชื่อรอบนี้");
+      return text("ℹ️ พี่ยังไม่ได้ลงชื่อรอบนี้นะครับ");
     case "GAME_FULL": {
       const current = details.current_players ?? "";
       const max = details.max_players ?? "";
       return text(`⛔ รอบนี้เต็มแล้ว\n\n🏸 ${current}/${max} คน\n\nไม่สามารถลงชื่อเพิ่มได้`);
     }
     case "DATE_IN_PAST":
-      return text("❌ วันเวลานี้ผ่านไปแล้ว ลองเลือกใหม่นะ");
+      return text("❌ วันเวลานี้ผ่านไปแล้วครับพี่ ลองเลือกใหม่นะ");
     case "PENDING_EXPIRED":
       return text("⛔ ปุ่มนี้หมดอายุหรือถูกใช้ไปแล้ว\n\nพิมพ์ “บอทจ๋า เปิดตี” เพื่อเริ่มใหม่");
     case "NOT_REQUESTER":
-      return text("⛔ เฉพาะคนที่สั่งเท่านั้นที่กดปุ่มนี้ได้");
+      return text("⛔ ปุ่มนี้กดได้เฉพาะคนที่สั่งไว้นะครับ");
     case "NOT_GAME_CREATOR":
-      return text("⛔ เฉพาะคนที่เปิดรอบเท่านั้นที่แก้ไข ยกเลิก หรือปิดรอบได้");
+      return text("⛔ แก้ไข ยกเลิก หรือปิดรอบ ทำได้เฉพาะคนที่เปิดรอบนะครับพี่");
     case "COURT_TOO_SMALL":
       return text(
         [
@@ -1264,13 +1271,13 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
         ].join("\n"),
       );
     case "NO_CHANGES":
-      return text("ℹ️ ไม่มีอะไรเปลี่ยนแปลง");
+      return text("ℹ️ ไม่มีอะไรเปลี่ยนเลยครับพี่");
     case "NO_BILL":
       return text('❌ รอบนี้ยังไม่ได้คิดเงิน\n\nคนที่เปิดรอบพิมพ์ "บอทจ๋า คิดเงิน" ได้เลย');
     case "BILL_ALREADY_EXISTS":
       return text('⛔ รอบนี้คิดเงินไปแล้ว\n\nถ้าจะคิดใหม่ต้องพิมพ์ "บอทจ๋า ยกเลิกบิล" ก่อน');
     case "NOT_YOUR_GUEST":
-      return text("⛔ ถอนได้เฉพาะตัวเอง กับคนที่คุณลงชื่อให้");
+      return text("⛔ ถอนได้เฉพาะตัวเองกับคนที่พี่ลงชื่อให้นะครับ");
     case "PERSON_NOT_FOUND": {
       const names = (details.names as string[] | undefined) ?? [];
       return text(
@@ -1286,14 +1293,14 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
       return text(`❓ มีหลายคนชื่อ ${names.join(", ")} ในกลุ่มนี้ ระบุให้ชัดกว่านี้หน่อย`);
     }
     case "NOT_IN_BILL":
-      return text("ℹ️ คุณไม่ได้อยู่ในบิลรอบนี้");
+      return text("ℹ️ พี่ไม่ได้อยู่ในบิลใบนี้นะครับ");
     case "NO_PLAYERS_TO_SPLIT":
-      return text("❌ ยังไม่มีใครลงชื่อ เลยหารไม่ได้");
+      return text("❌ ยังไม่มีใครลงชื่อเลยครับพี่ เลยหารไม่ได้");
     case "AMOUNT_INVALID":
       return text("❌ จำนวนเงินต้องมากกว่า 0 และไม่เกิน 100,000 บาท");
     case "MISSING_FIELDS":
       return text("ℹ️ ข้อมูลยังไม่ครบ ลองเริ่มใหม่ด้วย “บอทจ๋า เปิดตี”");
     default:
-      return text("😵 ระบบขัดข้อง ลองใหม่อีกครั้งนะ");
+      return text("😵 ระบบขัดข้องครับพี่ ลองใหม่อีกทีนะ");
   }
 }

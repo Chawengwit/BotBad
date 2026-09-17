@@ -43,21 +43,6 @@ export const RULE_COMMANDS = [
 export type RuleCommand = (typeof RULE_COMMANDS)[number];
 
 /**
- * คำสั่งที่ตอบกลับมาเป็นคำถาม เมนู หรือการ์ดให้ยืนยัน ไม่ใช่งานที่จบในตัว
- * ใช้ตัดสินว่าหลังตอบแล้วต้องเปิดโหมดฟังต่อไหม (spec §6)
- */
-const OPEN_ENDED_COMMANDS: readonly RuleCommand[] = [
-  "เมนู",
-  "ช่วยด้วย",
-  "เปิดตี",
-  "แก้ไข",
-  "ยกเลิก",
-  "ปิดรอบ",
-  "คิดเงิน",
-  "ยกเลิกบิล",
-];
-
-/**
  * คำสั่งที่รับรายชื่อหรือชื่อบิลต่อท้ายได้ (PRP guests-split-bills-and-digest §8.1)
  *
  * ของเดิมเทียบแบบตรงทั้งข้อความ (spec §18) ซึ่งใช้กับ "ลงชื่อ กิ้ฟ วิท" ไม่ได้
@@ -101,11 +86,6 @@ export function parseCommand(text: string): ParsedCommand | null {
   }
 
   return null;
-}
-
-/** คำสั่งนี้เปิดเรื่องค้างไว้ไหม ถ้าใช่แปลว่ายังคุยกันไม่จบ */
-export function keepsConversationOpen(command: RuleCommand): boolean {
-  return OPEN_ENDED_COMMANDS.includes(command);
 }
 
 /** ตัด wake word ออกและเก็บเฉพาะคำสั่ง */

@@ -117,7 +117,7 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
     await handleEvent(postbackEvent("action=join", owner.lineUserId), context);
     await handleEvent(postbackEvent("action=join", owner.lineUserId), context);
 
-    expect(messageTexts(collected[1]!.messages)).toContain("ลงชื่อรอบนี้ไปแล้ว");
+    expect(messageTexts(collected[1]!.messages)).toContain("ลงชื่อรอบนี้ไว้แล้ว");
     const rows = await sql`SELECT id FROM game_players WHERE user_id = ${owner.user.id}`;
     expect(rows).toHaveLength(1);
   });

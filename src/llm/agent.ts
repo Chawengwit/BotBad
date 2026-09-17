@@ -21,12 +21,6 @@ import { toolDeclarations } from "./tools";
 const MAX_INPUT_LENGTH = 500;
 const MAX_OUTPUT_LENGTH = 1_000;
 
-/**
- * tool ที่ทำงานเสร็จในตัว ไม่มีอะไรให้คุยต่อ
- * propose_ ไม่นับ เพราะยังรอให้กดปุ่มยืนยัน ส่วน get_ กับ list_ เป็นการถามข้อมูล ยังคุยต่อได้
- */
-const TERMINAL_TOOLS: readonly string[] = ["join_game", "leave_game", "mark_my_payment"];
-
 export type AgentInput = {
   text: string;
   lineGroupId: string;
@@ -40,8 +34,13 @@ export type AgentInput = {
 
 export type AgentReply = {
   messages: LineMessage[];
-  /** งานจบแล้ว ไม่มีอะไรค้าง ผู้เรียกเอาไปปิดโหมดฟัง */
-  done: boolean;
+  /**
+   * ข้อความนี้ไม่ได้คุยกับบอท หรือตีความไม่ออกในโหมดฟัง — ผู้เรียกเอาไปปิดโหมดฟัง
+   *
+   * งานที่ "สำเร็จ" ไม่ปิดโหมดฟังแล้ว เพราะสำเร็จคือกรณีปกติที่สุด
+   * ถ้าปิดทุกครั้งที่สำเร็จ ผู้ใช้ต้องเรียก "บอทจ๋า" ใหม่แทบทุกประโยค (spec §6)
+   */
+  ignored: boolean;
 };
 
 function toContents(history: SessionMessage[], userText: string): Content[] {
@@ -82,7 +81,6 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
   const userText = input.text.slice(0, MAX_INPUT_LENGTH);
   const toolContext: ToolContext = { lineGroupId: input.lineGroupId, user: input.user };
   const attachments: LineMessage[] = [];
-  const toolsRun: string[] = [];
 
   try {
     const [history, openGame, openBill] = await Promise.all([
@@ -126,7 +124,6 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
       for (const call of turn.calls) {
         const outcome = await executeTool(call.name, call.args, toolContext);
         attachments.push(...outcome.messages);
-        if (outcome.result.ok) toolsRun.push(call.name);
         outcomes.push({ name: call.name, response: outcome.result });
       }
 
@@ -144,24 +141,21 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
     // โหมดฟัง: LLM บอกว่าข้อความนี้ไม่ได้คุยกับบอท เงียบและปิดโหมดฟัง
     // ไม่บันทึกลง history ด้วย จะได้ไม่เอาบทสนทนาของคนอื่นไปปนบริบทของบอท
     if (input.listening && attachments.length === 0 && isIgnoreReply(replyText)) {
-      return { messages: [], done: true };
+      return { messages: [], ignored: true };
     }
 
     // ไม่มีทั้งข้อความและปุ่ม แปลว่าไปไม่สุด เช่น วน tool ครบแล้วยังไม่ได้คำตอบ
     if (!replyText && attachments.length === 0) return giveUp(input);
 
     await rememberTurn(input, history, userText, replyText);
-    return {
-      messages: buildReply(replyText, attachments),
-      done: toolsRun.some((name) => TERMINAL_TOOLS.includes(name)),
-    };
+    return { messages: buildReply(replyText, attachments), ignored: false };
   } catch (error) {
     console.error("[llm] failed:", formatErrorForLog(error));
 
     // งานบางอย่างทำไปแล้วก่อนพัง ต้องส่งการ์ดให้ผู้ใช้เห็น ไม่งั้นจะมีรายการค้างที่ไม่มีปุ่มกด
     if (attachments.length > 0) {
       await rememberTurn(input, [], userText, "").catch(() => {});
-      return { messages: buildReply("นี่คือผลล่าสุดครับ 👇", attachments), done: false };
+      return { messages: buildReply("นี่คือผลล่าสุดครับ 👇", attachments), ignored: false };
     }
     return giveUp(input);
   }
@@ -169,8 +163,8 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
 
 /** ตีความไม่ได้หรือพังไปเลย มีทางเข้าสองทางจึงยอมแพ้คนละแบบ */
 function giveUp(input: AgentInput): AgentReply {
-  if (input.listening) return { messages: [], done: true };
-  return { messages: [fallbackMenu()], done: false };
+  if (input.listening) return { messages: [], ignored: true };
+  return { messages: [fallbackMenu()], ignored: false };
 }
 
 /** ข้อความจาก LLM + การ์ด รวมแล้วต้องไม่เกินที่ LINE ส่งได้ต่อครั้ง เก็บการ์ดใบล่าสุดไว้ก่อน */
