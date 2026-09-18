@@ -226,11 +226,14 @@ function buttonBox(button: Button): FlexBox {
   };
 }
 
-/** ปุ่มท้ายการ์ด เรียงแถวละสองปุ่ม จะได้ไม่ยาวเป็นหางเวลามีตัวเลือกเยอะ */
-export function footerButtons(buttons: Button[]): FlexBox {
+/**
+ * ปุ่มท้ายการ์ด เรียงแถวละสองปุ่ม จะได้ไม่ยาวเป็นหางเวลามีตัวเลือกเยอะ
+ * ปุ่มที่ป้ายยาว (ชื่อบิล ชื่อรายการ) ใช้แถวละปุ่ม ไม่งั้นป้ายโดนตัดเหลือครึ่งคำ
+ */
+export function footerButtons(buttons: Button[], perRow = 2): FlexBox {
   const rows: FlexBox[] = [];
-  for (let index = 0; index < buttons.length; index += 2) {
-    rows.push(hbox(buttons.slice(index, index + 2).map(buttonBox), { spacing: "sm" }));
+  for (let index = 0; index < buttons.length; index += perRow) {
+    rows.push(hbox(buttons.slice(index, index + perRow).map(buttonBox), { spacing: "sm" }));
   }
   return vbox(rows, { spacing: "sm", paddingAll: "12px" });
 }
@@ -239,12 +242,17 @@ export function footerButtons(buttons: Button[]): FlexBox {
  * การ์ดคำถามหรือเมนู: หัวข้อ รายละเอียด แล้วปุ่มท้ายการ์ด
  * ใช้แทนข้อความธรรมดาเมื่อมีปุ่ม เพราะปุ่มท้ายการ์ดกดได้ทั้งบนมือถือและ LINE PC
  */
-export function questionCard(question: Headline, details: FlexComponent[], buttons: Button[]): FlexMessage {
+export function questionCard(
+  question: Headline,
+  details: FlexComponent[],
+  buttons: Button[],
+  perRow = 2,
+): FlexMessage {
   return flexMessage(
     question.text,
     bubble({
       body: vbox([heading(question, "accent", "md"), ...details], { spacing: "md", paddingAll: "20px" }),
-      footer: footerButtons(buttons),
+      footer: footerButtons(buttons, perRow),
     }),
   );
 }

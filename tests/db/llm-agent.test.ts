@@ -215,13 +215,15 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
       ]),
     );
 
-    expect(messageTexts(messages)).toContain("ค่ากินข้าว");
+    // บิลลอย ๆ ไม่มีรอบให้ดึงเลขพร้อมเพย์ จึงได้คำถามเลขก่อน ยังไม่ใช่การ์ดยืนยัน (PRP §5.2.1)
+    expect(messageTexts(messages)).toContain("เลขพร้อมเพย์");
     // ยังไม่ส่งบิลจริงจนกว่าจะกดยืนยัน และ pending ต้องไม่ผูกกับรอบ
     expect(await sql`SELECT id FROM bills WHERE game_id = ${game.id}`).toHaveLength(0);
-    const pending = await sql<{ game_id: string | null }[]>`
-      SELECT game_id FROM pending_actions WHERE line_group_id = ${GROUP_ID}
+    const pending = await sql<{ game_id: string | null; title: string; awaiting: string }[]>`
+      SELECT game_id, payload ->> 'title' AS title, payload ->> 'awaiting' AS awaiting
+      FROM pending_actions WHERE line_group_id = ${GROUP_ID}
     `;
-    expect(pending[0]?.game_id).toBeNull();
+    expect(pending[0]).toMatchObject({ game_id: null, title: "ค่ากินข้าว", awaiting: "bill_promptpay" });
 
     // กิ้ฟ ที่ยังไม่รู้จัก ถูกเพิ่มเป็นแขกของกลุ่มให้เลย
     const guests = await sql<{ display_name: string }[]>`

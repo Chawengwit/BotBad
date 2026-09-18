@@ -19,7 +19,11 @@ import {
   playerList,
 } from "@/line/messages";
 import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
-import { createPendingAction, updatePendingPayload } from "@/repositories/pending-action.repository";
+import {
+  createPendingAction,
+  updatePendingPayload,
+  type PendingPayload,
+} from "@/repositories/pending-action.repository";
 import { findPlayerStatus } from "@/repositories/player.repository";
 import type { LineUserRow } from "@/repositories/types";
 import {
@@ -32,6 +36,7 @@ import { defaultMaxPlayers, gameDraftSchema, missingDraftFields } from "@/servic
 import {
   billDraftSchema,
   buildBillItems,
+  continueNewBill,
   getBill,
   markPayment,
   startCreateBill,
@@ -40,7 +45,8 @@ import {
   totalOf,
   unpaidSharesForGame,
 } from "@/services/bill.service";
-import { advanceBillWizard } from "@/router/wizard";
+import { doBillMenu, doStartEditBill, doStartGameBill, doStartNewBill } from "@/router/bill-actions";
+import { advanceBillWizard, needsBillPromptPay } from "@/router/wizard";
 import { joinGame, joinPeople, leaveGame, leavePeople, listPlayers } from "@/services/player.service";
 import { resolveOrCreateGuests, resolvePeople } from "@/services/people.service";
 import { upsertGuest } from "@/repositories/user.repository";
@@ -61,6 +67,8 @@ export type ToolOutcome = {
 export type ToolContext = {
   lineGroupId: string;
   user: LineUserRow;
+  /** กำลังสร้างบิลใหม่ต่อจากปุ่ม "สร้างบิลใหม่" propose_create_bill ต้องใช้ pending ใบนี้ต่อ */
+  billPendingId?: string;
 };
 
 function ok(data: unknown, messages: LineMessage[] = []): ToolOutcome {
@@ -283,12 +291,31 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
       );
     }
 
+    case "start_bill": {
+      // ทางเดียวกับการ์ด "คิดเงินอะไรดี?" ทุกประการ ทั้งตอนไม่ระบุและตอนระบุว่าเรื่องไหน
+      const kind = args.kind as "game" | "new" | "edit" | undefined;
+      const messages =
+        kind === "game"
+          ? await doStartGameBill(lineGroupId, user)
+          : kind === "new"
+            ? await doStartNewBill(lineGroupId, user, (args.title as string | undefined) ?? "")
+            : kind === "edit"
+              ? await doStartEditBill(lineGroupId, user)
+              : await doBillMenu(lineGroupId, user);
+
+      return ok({ status: "waiting_for_user" }, messages);
+    }
+
     case "propose_create_bill": {
       const draft = billDraftSchema.parse(args);
       const title = (args.title as string | undefined)?.trim() ?? "";
+      const promptpay = args.promptpay as string | undefined;
 
-      // ตรวจสิทธิ์และเงื่อนไขก่อน จะได้ไม่สร้างการ์ดยืนยันที่กดไปก็ไม่ผ่าน
-      const { pending } = await startCreateBill(lineGroupId, user.id, title);
+      // มาจากปุ่ม "สร้างบิลใหม่" ใช้ pending ใบนั้นต่อ ไม่งั้นตรวจสิทธิ์และเงื่อนไขก่อน
+      // จะได้ไม่สร้างการ์ดยืนยันที่กดไปก็ไม่ผ่าน
+      const pending = context.billPendingId
+        ? await continueNewBill(context.billPendingId, lineGroupId, user.id, title)
+        : (await startCreateBill(lineGroupId, user.id, title)).pending;
 
       const items = buildBillItems(draft);
 
@@ -306,16 +333,27 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
 
       // มาทาง LLM คือได้ข้อมูลครบในประโยคเดียว ช่องที่ไม่ได้บอกมาให้เป็น null
       // (= ไม่มีรายการนี้) ไม่ใช่ undefined ซึ่งจะทำให้ wizard ย้อนไปถามใหม่
-      const preview = await advanceBillWizard(pending, {
+      const patch: PendingPayload = {
         court_fee: draft.court_fee ?? null,
         shuttle_count: draft.shuttle_count ?? null,
         shuttle_price: draft.shuttle_price ?? null,
         ...(draft.other_items ? { other_items: draft.other_items } : {}),
         ...(chosen.length > 0 ? { item_payers: itemPayers, payer_names: payerNames } : {}),
+        ...(promptpay ? { promptpay, promptpay_asked: true } : {}),
         extras_done: true,
-      });
+      };
 
-      return ok({ status: "awaiting_confirmation", total_baht: toBaht(totalOf(items)) }, preview);
+      // บิลลอย ๆ ที่ยังไม่รู้เลขพร้อมเพย์ จะได้คำถามเลขก่อน ไม่ใช่การ์ดยืนยัน
+      const asksPromptPay = needsBillPromptPay(pending, { ...pending.payload, ...patch });
+      const preview = await advanceBillWizard(pending, patch);
+
+      return ok(
+        {
+          status: asksPromptPay ? "awaiting_promptpay" : "awaiting_confirmation",
+          total_baht: toBaht(totalOf(items)),
+        },
+        preview,
+      );
     }
 
     case "mark_my_payment": {

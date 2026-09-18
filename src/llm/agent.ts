@@ -30,6 +30,8 @@ export type AgentInput = {
   now?: Date;
   /** ข้อความนี้มาทางโหมดฟัง ไม่ได้ขึ้นต้นด้วย wake word (spec §6) */
   listening?: boolean;
+  /** ข้อความนี้คือชื่อบิลกับรายการ ตอบต่อจากปุ่ม "สร้างบิลใหม่" title ว่าง = ยังไม่ได้ตั้งชื่อ */
+  newBill?: { pendingId: string; title: string };
 };
 
 /**
@@ -78,7 +80,11 @@ async function buildGameContext(lineGroupId: string, user: LineUserRow) {
  */
 export async function runAgent(input: AgentInput): Promise<AgentReply> {
   const userText = input.text.slice(0, MAX_INPUT_LENGTH);
-  const toolContext: ToolContext = { lineGroupId: input.lineGroupId, user: input.user };
+  const toolContext: ToolContext = {
+    lineGroupId: input.lineGroupId,
+    user: input.user,
+    ...(input.newBill ? { billPendingId: input.newBill.pendingId } : {}),
+  };
   const attachments: LineMessage[] = [];
 
   try {
@@ -94,6 +100,7 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
       openBill,
       ...(input.now ? { now: input.now } : {}),
       ...(input.listening ? { listening: true } : {}),
+      ...(input.newBill ? { newBill: { title: input.newBill.title } } : {}),
     });
 
     const contents = toContents(history, userText);

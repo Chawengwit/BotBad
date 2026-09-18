@@ -29,8 +29,22 @@ import {
   MAX_PLAYERS,
   MIN_PLAYERS,
 } from "@/services/game.service";
-import { confirmCancelBill, confirmCreateBill, unpaidSharesForGame } from "@/services/bill.service";
-import { doMarkPayment, doUnpaidList } from "./bill-actions";
+import {
+  confirmCancelBill,
+  confirmCreateBill,
+  confirmEditBill,
+  selectBillToEdit,
+  unpaidSharesForGame,
+} from "@/services/bill.service";
+import { findLastPromptPayOf } from "@/repositories/bill.repository";
+import {
+  doChooseBillKind,
+  doEditBillAction,
+  doMarkPayment,
+  doRemoveBillItem,
+  doUnpaidList,
+  showBillEdit,
+} from "./bill-actions";
 import { doJoin, doLeave, doList } from "./game-actions";
 import { advanceBillWizard, advanceCreateWizard, advanceEditWizard, questionFor } from "./wizard";
 
@@ -57,6 +71,12 @@ const postbackSchema = z.discriminatedUnion("action", [
       "shuttle_count",
       "shuttle_price",
       "extra",
+      // การ์ด "คิดเงินอะไรดี?": game / new / edit
+      "bill_kind",
+      // แก้บิล: เลือกบิล (value = id บิล), ปุ่มบนการ์ด (add / remove / back), ลบรายการ (value = ref ของรายการ)
+      "edit_bill",
+      "edit",
+      "edit_remove",
     ]),
     value: z.string().min(1).max(40),
   }),
@@ -194,6 +214,10 @@ async function runConfirm(
       await confirmCancelBill(pending.id, lineGroupId, userId);
       return [billCancelled()];
     }
+    case "edit_bill": {
+      const { bill, items, shares } = await confirmEditBill(pending.id, lineGroupId, userId);
+      return [billCard(bill, items, shares, { icon: "pen", text: "แก้บิลแล้ว" })];
+    }
   }
 }
 
@@ -312,9 +336,27 @@ export async function handlePostback(
     return handleBillStep(pending, parsed.step, parsed.value);
   }
 
+  if (parsed.step === "bill_kind") {
+    if (pending.action_type !== "create_bill") throw new AppError("INTERNAL_ERROR");
+    return doChooseBillKind(pending, parsed.value, input.user);
+  }
+
+  if (parsed.step === "edit_bill" || parsed.step === "edit" || parsed.step === "edit_remove") {
+    if (pending.action_type !== "edit_bill") throw new AppError("INTERNAL_ERROR");
+    if (parsed.step === "edit_bill") return showBillEdit(await selectBillToEdit(pending, parsed.value));
+    if (parsed.step === "edit") return doEditBillAction(pending, parsed.value);
+    return doRemoveBillItem(pending, parsed.value);
+  }
+
   if (parsed.step === "promptpay") {
-    // ปุ่มบนคำถามเลขพร้อมเพย์มีสองอย่าง: ข้ามไปเลย หรือใช้เลขเดิมของกลุ่ม
+    // ปุ่มบนคำถามเลขพร้อมเพย์มีสองอย่าง: ข้ามไปเลย หรือใช้เลขเดิม
     if (parsed.value !== "skip" && parsed.value !== "reuse") throw new AppError("INTERNAL_ERROR");
+
+    // บิลลอย ๆ เสนอเลขที่คนสร้างบิลเคยใช้เอง ไม่ใช่เลขล่าสุดของกลุ่ม (PRP §5.2.1)
+    if (pending.action_type === "create_bill") {
+      const own = parsed.value === "reuse" ? await findLastPromptPayOf(pending.requested_by) : null;
+      return advanceBillWizard(pending, { promptpay_asked: true, ...(own ? { promptpay: own } : {}) });
+    }
 
     const lastUsed = parsed.value === "reuse" ? await findLatestPromptPay(input.lineGroupId) : null;
 

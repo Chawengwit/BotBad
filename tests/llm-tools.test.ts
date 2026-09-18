@@ -81,6 +81,34 @@ describe("tool argument schemas", () => {
   ])("ปฏิเสธ %s", (_label, args) => {
     expect(toolSchemas.propose_create_game.safeParse(args).success).toBe(false);
   });
+
+  it.each([
+    ["ไม่ระบุว่าเรื่องไหน", {}],
+    ["บิลใหม่พร้อมชื่อ", { kind: "new", title: "ร้านโชคดี" }],
+    ["คิดค่ารอบ", { kind: "game" }],
+    ["แก้บิลเดิม", { kind: "edit" }],
+  ])("start_bill รับ %s", (_label, args) => {
+    expect(toolSchemas.start_bill.safeParse(args).success).toBe(true);
+  });
+
+  it.each([
+    ["kind ที่ไม่รู้จัก", { kind: "delete" }],
+    ["ชื่อบิลว่าง", { kind: "new", title: " " }],
+    ["ฟิลด์แปลกปลอม", { bill_id: "7" }],
+  ])("start_bill ปฏิเสธ %s", (_label, args) => {
+    expect(toolSchemas.start_bill.safeParse(args).success).toBe(false);
+  });
+
+  it("บอกเลขพร้อมเพย์มากับบิลได้ เก็บเป็นตัวเลขล้วน", () => {
+    const parsed = toolSchemas.propose_create_bill.safeParse({
+      title: "ร้านโชคดี",
+      other_items: [{ label: "ค่าข้าว", amount: 1500 }],
+      promptpay: "081-234-5678",
+    });
+
+    expect(parsed.success && parsed.data.promptpay).toBe("0812345678");
+    expect(toolSchemas.propose_create_bill.safeParse({ promptpay: "12345" }).success).toBe(false);
+  });
 });
 
 describe("reply limit", () => {
@@ -118,5 +146,26 @@ describe("system prompt", () => {
     expect(prompt).not.toContain("{{");
     expect(prompt).toContain("R14");
     expect(prompt).toContain("R16");
+  });
+
+  /**
+   * "คิดเงิน" ที่ไม่บอกว่าเรื่องไหน ต้องให้ผู้ใช้เลือก ไม่เดาว่าเป็นค่ารอบ
+   * และห้ามถามรายการเป็นข้อความเฉย ๆ เพราะคำตอบถัดไปจะหลุดไปเป็นคำสั่งดูบิล
+   */
+  it("มีกฎให้เรียก start_bill เมื่อยังไม่รู้รายการ", () => {
+    const prompt = buildSystemPrompt({ displayName: "เชวง", openGame: null, now });
+
+    expect(prompt).toContain("R23");
+    expect(prompt).toContain("start_bill");
+    expect(prompt).not.toContain("งานที่กำลังทำ: สร้างบิลใหม่");
+  });
+
+  it("ตอบต่อจากปุ่มสร้างบิลใหม่ บอก LLM ว่าข้อความนี้คือบิล พร้อมชื่อที่ตั้งไว้", () => {
+    const named = buildSystemPrompt({ displayName: "เชวง", openGame: null, now, newBill: { title: "ร้านโชคดี" } });
+    expect(named).toContain("งานที่กำลังทำ: สร้างบิลใหม่");
+    expect(named).toContain('title "ร้านโชคดี"');
+
+    const unnamed = buildSystemPrompt({ displayName: "เชวง", openGame: null, now, newBill: { title: "" } });
+    expect(unnamed).toContain("ยังไม่ได้ตั้งชื่อบิลให้ถามชื่อก่อน");
   });
 });

@@ -27,13 +27,17 @@ import {
   askShuttlePrice,
   askTime,
   askWhen,
+  askWhichBillToEdit,
+  askWhichItemToRemove,
   billCard,
+  billMenu,
   confirmBill,
   confirmCancelBill,
   confirmCancelGame,
   confirmCloseGame,
   confirmCreateGame,
   confirmEditGame,
+  editBillCard,
   editMenu,
   fallbackMenu,
   gameCancelled,
@@ -49,6 +53,7 @@ import {
   unpaidList,
 } from "@/line/messages";
 import type { BillRow, BillShareRow, GameRow } from "@/repositories/types";
+import { planBillEdit } from "@/services/bill.service";
 
 const PENDING_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -169,6 +174,10 @@ describe("ข้อความที่ถามหรือขอยืนย�
   });
 });
 
+/** ชื่อบิลและชื่อรายการตั้งเองได้ยาวกว่าป้ายปุ่มที่ LINE รับ (40 ตัวอักษร) */
+const LONG_LABEL = "ค่ากินข้าวหลังตีที่ร้านข้าวต้มปากซอยหลังสนามแบดมินตันเจ้าเก่า";
+const ADD_WATER = { added: [{ label: "ค่าน้ำ", amount: 60, payer_ids: [] }], removedIds: [] };
+
 /** ทุกข้อความที่มีปุ่มให้กด */
 const BUTTON_MESSAGES: [string, LineMessage][] = [
   ["ถามจำนวนคอร์ท", askCourtCount(PENDING_ID)],
@@ -194,6 +203,16 @@ const BUTTON_MESSAGES: [string, LineMessage][] = [
   ["ทักทาย", greeting()],
   ["เมนูช่วยเหลือ", helpMenu()],
   ["เมนูสำรองตอนตีความไม่ออก", fallbackMenu()],
+  ["คิดเงินอะไรดี", billMenu(PENDING_ID, { game, gameBlocked: null, editableBills: [bill] })],
+  ["เลือกบิลที่จะแก้ ชื่อบิลยาว", askWhichBillToEdit(PENDING_ID, [bill, makeBill({ id: "2", title: LONG_LABEL })])],
+  ["แก้บิล", editBillCard(PENDING_ID, bill, planBillEdit(bill, items, shares, ADD_WATER), new Map())],
+  [
+    "เลือกรายการที่จะลบ ชื่อรายการยาว",
+    askWhichItemToRemove(
+      PENDING_ID,
+      planBillEdit(bill, items, shares, { added: [{ label: LONG_LABEL.slice(0, 40), amount: 60, payer_ids: [] }], removedIds: [] }),
+    ),
+  ],
 ];
 
 /**

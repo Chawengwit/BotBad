@@ -14,7 +14,10 @@ import {
   askShuttlePrice,
   askTime,
   askWhen,
+  askWhichBillToEdit,
+  askWhichItemToRemove,
   billCard,
+  billMenu,
   confirmBill,
   confirmCancelBill,
   confirmCancelGame,
@@ -22,6 +25,7 @@ import {
   confirmCreateGame,
   confirmEditGame,
   digestCard,
+  editBillCard,
   editMenu,
   fallbackMenu,
   gameCard,
@@ -31,6 +35,7 @@ import {
   unpaidList,
 } from "@/line/messages";
 import type { BillRow, BillShareRow, GameRow } from "@/repositories/types";
+import { planBillEdit } from "@/services/bill.service";
 import { buttonLabels, hasButtons, makeBill, makeItem, makeShare, messageText } from "./helpers";
 
 const PENDING_ID = "11111111-1111-4111-8111-111111111111";
@@ -96,6 +101,7 @@ const CARDS: [string, LineMessage][] = [
   ["ยืนยันปิดรอบ", confirmCloseGame(PENDING_ID, game, 8)],
   ["ยืนยันปิดรอบ ทั้งที่ยังมีคนค้าง", confirmCloseGame(PENDING_ID, game, 8, [mixedShares[1]!])],
   ["ยืนยันส่งบิล", confirmBill(PENDING_ID, "รอบ พุธ 16 ก.ย.", items, 70000, mixedShares)],
+  ["ยืนยันส่งบิล พร้อมเลขพร้อมเพย์", confirmBill(PENDING_ID, "ค่ากินข้าว", items, 70000, mixedShares, "0812345678")],
   ["การ์ดบิล", billCard(bill, items, mixedShares, { icon: "receipt", text: "คิดเงินแล้ว" })],
   ["การ์ดบิล ไม่มีพร้อมเพย์และจ่ายครบแล้ว", billCard(bareBill, items, allPaid)],
   ["ใครยังไม่จ่าย", unpaidList(bill, mixedShares)],
@@ -103,6 +109,11 @@ const CARDS: [string, LineMessage][] = [
   ["ยืนยันยกเลิกบิล", confirmCancelBill(PENDING_ID, bill, mixedShares)],
   ["ยืนยันยกเลิกบิล ตอนยังไม่มีใครจ่าย", confirmCancelBill(PENDING_ID, bill, [share("2", "Bank", false)])],
 ];
+
+/** แก้บิล: ยังไม่ได้แก้อะไร กับเพิ่มค่าน้ำพร้อมลบลูกแบด */
+const NO_EDIT = { added: [], removedIds: [] };
+const EDIT = { added: [{ label: "ค่าน้ำ", amount: 60, payer_ids: [] }], removedIds: ["1"] };
+const NAMES = new Map(payers.map((payer) => [payer.user_id, payer.display_name]));
 
 /** การ์ดคำถามและเมนูที่มีปุ่ม ตรวจโครงสร้างร่วมกับการ์ดชุดบน */
 const QUESTION_CARDS: [string, LineMessage][] = [
@@ -134,6 +145,16 @@ const QUESTION_CARDS: [string, LineMessage][] = [
       unpaidTotalSatang: 70000,
     }),
   ],
+  ["คิดเงินอะไรดี ครบทุกทาง", billMenu(PENDING_ID, { game, gameBlocked: null, editableBills: [bill] })],
+  [
+    "คิดเงินอะไรดี คิดค่ารอบไม่ได้",
+    billMenu(PENDING_ID, { game: null, gameBlocked: { game, reason: "no_players" }, editableBills: [bill] }),
+  ],
+  ["คิดเงินอะไรดี ไม่มีรอบและไม่มีบิล", billMenu(PENDING_ID, { game: null, gameBlocked: null, editableBills: [] })],
+  ["เลือกบิลที่จะแก้", askWhichBillToEdit(PENDING_ID, [bill, bareBill])],
+  ["แก้บิล ยังไม่ได้แก้อะไร", editBillCard(PENDING_ID, bill, planBillEdit(bill, items, mixedShares, NO_EDIT), NAMES)],
+  ["แก้บิล เพิ่มและลบรายการ", editBillCard(PENDING_ID, bill, planBillEdit(bill, items, mixedShares, EDIT), NAMES)],
+  ["เลือกรายการที่จะลบ", askWhichItemToRemove(PENDING_ID, planBillEdit(bill, items, mixedShares, EDIT))],
 ];
 
 function isFlex(message: LineMessage): message is FlexMessage {

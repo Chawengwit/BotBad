@@ -27,6 +27,21 @@ describe("parsePostbackData", () => {
     });
   });
 
+  it.each([
+    ["การ์ดคิดเงินอะไรดี", "bill_kind", "new"],
+    ["เลือกบิลที่จะแก้", "edit_bill", "42"],
+    ["ปุ่มบนการ์ดแก้บิล", "edit", "add"],
+    ["ลบรายการเดิม", "edit_remove", "17"],
+    ["ลบรายการที่เพิ่งเพิ่ม", "edit_remove", "new0"],
+  ])("อ่านปุ่ม%sได้", (_label, step, value) => {
+    expect(parsePostbackData(`action=wizard&pending_id=${PENDING_ID}&step=${step}&value=${value}`)).toEqual({
+      action: "wizard",
+      pending_id: PENDING_ID,
+      step,
+      value,
+    });
+  });
+
   it("อ่านปุ่มยืนยันและยกเลิกได้", () => {
     expect(parsePostbackData(`action=confirm&pending_id=${PENDING_ID}`)).toEqual({
       action: "confirm",

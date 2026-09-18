@@ -5,6 +5,9 @@ import {
   billDraftSchema,
   buildBillItems,
   parseItemLine,
+  parseItemLines,
+  planBillEdit,
+  readEditState,
   splitByItem,
   splitEqually,
   summarize,
@@ -12,7 +15,7 @@ import {
   totalOf,
 } from "@/services/bill.service";
 import type { BillShareRow } from "@/repositories/types";
-import { makeShare } from "./helpers";
+import { makeBill, makeItem, makeShare } from "./helpers";
 
 function errorCode(run: () => unknown): string {
   try {
@@ -260,6 +263,163 @@ describe("parseItemLine", () => {
       amount: 100,
       payerNames: ["ฮก"],
     });
+  });
+
+  /** แบบที่คนในกลุ่มพิมพ์กันจริง: มีขีดนำหน้า และมีคำว่า "คิด" ก่อนรายชื่อ */
+  it.each([
+    ["- ค่าข้าว 1500 คิด วิท ฮก กิ๊ฟ", "ค่าข้าว", 1500, ["วิท", "ฮก", "กิ๊ฟ"]],
+    ["-ค่าน้ำ 100 คิด ฮก วิท", "ค่าน้ำ", 100, ["ฮก", "วิท"]],
+    ["• ค่าแบด 600 หาร กิ๊ฟ วิท", "ค่าแบด", 600, ["กิ๊ฟ", "วิท"]],
+    ["1. ค่าขนม 120 เก็บ เชวง", "ค่าขนม", 120, ["เชวง"]],
+    ["2) ค่าน้ำแข็ง 40", "ค่าน้ำแข็ง", 40, []],
+  ])("ตัดหัวข้อย่อยกับคำนำหน้ารายชื่อ: %s", (input, label, amount, payerNames) => {
+    expect(parseItemLine(input)).toEqual({ label, amount, payerNames });
+  });
+
+  it("ชื่อคนที่บังเอิญขึ้นต้นเหมือนคำนำหน้า ไม่ถูกตัดทิ้ง", () => {
+    expect(parseItemLine("ค่าน้ำ 60 คิดตี้ แบงค์")?.payerNames).toEqual(["คิดตี้", "แบงค์"]);
+  });
+});
+
+describe("parseItemLines", () => {
+  it("บรรทัดละรายการ ข้ามบรรทัดว่าง", () => {
+    expect(parseItemLines("ค่าน้ำแข็ง 40\n\n- ค่าขนม 120 คิด เชวง แบงค์\n")).toEqual([
+      { label: "ค่าน้ำแข็ง", amount: 40, payerNames: [] },
+      { label: "ค่าขนม", amount: 120, payerNames: ["เชวง", "แบงค์"] },
+    ]);
+  });
+
+  it("มีบรรทัดที่อ่านไม่ออก ไม่รับทั้งก้อน จะได้ไม่เพิ่มแค่บางรายการโดยคนพิมพ์ไม่รู้ตัว", () => {
+    expect(parseItemLines("ค่าน้ำแข็ง 40\nขอบคุณครับ")).toBeNull();
+  });
+
+  it.each(["", "\n\n"])("ไม่มีรายการเลย: %j", (input) => {
+    expect(parseItemLines(input)).toBeNull();
+  });
+});
+
+/**
+ * แก้บิลที่ส่งไปแล้ว (เพิ่ม/ลบรายการ)
+ * บิลตั้งต้น: ค่าข้าว 900 เก็บ 3 คน (คนละ 300) + ค่าน้ำ 60 เก็บแบงค์กับกิ้ฟ (คนละ 30)
+ * เชวงสร้างบิลและจ่ายแล้ว แบงค์จ่ายแล้ว กิ้ฟยังไม่จ่าย
+ */
+describe("planBillEdit", () => {
+  const people = {
+    "1": { user_id: "1", display_name: "เชวง" },
+    "2": { user_id: "2", display_name: "แบงค์" },
+    "3": { user_id: "3", display_name: "กิ้ฟ" },
+  };
+  const payer = (id: "1" | "2" | "3", amount: number) => ({ ...people[id], amount_satang: amount });
+
+  const bill = makeBill({ created_by: "1", game_id: null, total_satang: 96000 });
+  const items = [
+    makeItem(0, "ค่าข้าว", 90000, [payer("1", 30000), payer("2", 30000), payer("3", 30000)]),
+    makeItem(1, "ค่าน้ำ", 6000, [payer("2", 3000), payer("3", 3000)]),
+  ];
+  const shares = [
+    makeShare("1", "เชวง", true, 30000),
+    makeShare("2", "แบงค์", true, 33000),
+    makeShare("3", "กิ้ฟ", false, 33000),
+  ];
+
+  const amounts = (plan: ReturnType<typeof planBillEdit>) =>
+    Object.fromEntries(plan.shares.map((share) => [share.userId, share.amountSatang]));
+  const names = (rows: BillShareRow[]) => rows.map((row) => row.display_name);
+
+  it("ยังไม่ได้แก้อะไร ยอดทุกคนเท่าเดิมและยังยืนยันไม่ได้", () => {
+    const plan = planBillEdit(bill, items, shares, { added: [], removedIds: [] });
+
+    expect(plan.changed).toBe(false);
+    expect(amounts(plan)).toEqual({ "1": 30000, "2": 33000, "3": 33000 });
+    expect(plan.resetPaid).toEqual([]);
+  });
+
+  it("เพิ่มรายการที่ไม่ระบุชื่อ เก็บทุกคนในบิล คนที่จ่ายแล้วแต่ยอดเปลี่ยนต้องกลับไปจ่ายใหม่", () => {
+    const plan = planBillEdit(bill, items, shares, {
+      added: [{ label: "ค่าน้ำแข็ง", amount: 30, payer_ids: [] }],
+      removedIds: [],
+    });
+
+    expect(plan.changed).toBe(true);
+    expect(plan.totalSatang).toBe(99000);
+    expect(amounts(plan)).toEqual({ "1": 31000, "2": 34000, "3": 34000 });
+    expect(names(plan.resetPaid)).toEqual(["เชวง", "แบงค์"]);
+    expect(plan.items.at(-1)).toMatchObject({ label: "ค่าน้ำแข็ง", added: true, ref: "new0" });
+  });
+
+  it("เพิ่มรายการที่ระบุชื่อ เก็บเฉพาะคนนั้น คนอื่นยอดเท่าเดิมและสถานะไม่เปลี่ยน", () => {
+    const plan = planBillEdit(bill, items, shares, {
+      added: [{ label: "ค่าขนม", amount: 50, payer_ids: ["3"] }],
+      removedIds: [],
+    });
+
+    expect(amounts(plan)).toEqual({ "1": 30000, "2": 33000, "3": 38000 });
+    // กิ้ฟยังไม่ได้จ่ายอยู่แล้ว ไม่ต้องเตือนว่ากลับเป็นยังไม่จ่าย
+    expect(plan.resetPaid).toEqual([]);
+  });
+
+  it("ลบรายการ คนที่ยอดไม่เปลี่ยนยังจ่ายแล้วเหมือนเดิม", () => {
+    const plan = planBillEdit(bill, items, shares, { added: [], removedIds: ["1"] });
+
+    expect(plan.removed.map((item) => item.label)).toEqual(["ค่าน้ำ"]);
+    expect(amounts(plan)).toEqual({ "1": 30000, "2": 30000, "3": 30000 });
+    expect(names(plan.resetPaid)).toEqual(["แบงค์"]);
+  });
+
+  it("ลบจนมีคนไม่เหลือรายการไหน คนนั้นหลุดจากบิล และถ้าจ่ายแล้วต้องเตือน", () => {
+    const plan = planBillEdit(bill, items, shares, { added: [], removedIds: ["0"] });
+
+    expect(amounts(plan)).toEqual({ "2": 3000, "3": 3000 });
+    expect(names(plan.droppedPaid)).toEqual(["เชวง"]);
+    expect(names(plan.resetPaid)).toEqual(["แบงค์"]);
+  });
+
+  it("รายการเดิมที่ไม่ได้ลบ อ้างถึงด้วย id รายการใหม่อ้างด้วยลำดับ", () => {
+    const plan = planBillEdit(bill, items, shares, {
+      added: [
+        { label: "ค่าน้ำแข็ง", amount: 30, payer_ids: [] },
+        { label: "ค่าขนม", amount: 50, payer_ids: ["3"] },
+      ],
+      removedIds: ["0"],
+    });
+
+    expect(plan.items.map((item) => item.ref)).toEqual(["1", "new0", "new1"]);
+  });
+
+  it("เศษสตางค์ของรายการใหม่ตกที่คนสร้างบิล เหมือนตอนสร้างบิล", () => {
+    const plan = planBillEdit(bill, items, shares, {
+      added: [{ label: "ค่าทิป", amount: 1, payer_ids: [] }],
+      removedIds: [],
+    });
+
+    const tip = plan.items.find((item) => item.label === "ค่าทิป");
+    expect(tip?.payers).toEqual([
+      { userId: "1", amountSatang: 34 },
+      { userId: "2", amountSatang: 33 },
+      { userId: "3", amountSatang: 33 },
+    ]);
+  });
+
+  it("รายการที่เลือกลบไว้ไม่มีอยู่แล้ว แปลว่าบิลถูกแก้จากที่อื่น ยืนยันต่อไม่ได้", () => {
+    expect(errorCode(() => planBillEdit(bill, items, shares, { added: [], removedIds: ["99"] }))).toBe(
+      "PENDING_EXPIRED",
+    );
+  });
+
+  it("ลบจนไม่เหลือรายการเลย ไม่ใช่บิล", () => {
+    expect(errorCode(() => planBillEdit(bill, items, shares, { added: [], removedIds: ["0", "1"] }))).toBe(
+      "AMOUNT_INVALID",
+    );
+  });
+});
+
+describe("readEditState", () => {
+  it("ยังไม่ได้แก้อะไร ได้รายการว่าง", () => {
+    expect(readEditState({ bill_id: "7" })).toEqual({ billId: "7", added: [], removedIds: [] });
+  });
+
+  it("ยังไม่ได้เลือกบิล ถือว่า pending ใช้ไม่ได้", () => {
+    expect(errorCode(() => readEditState({}))).toBe("PENDING_EXPIRED");
   });
 });
 

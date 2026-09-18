@@ -172,14 +172,45 @@ export const toolDeclarations: FunctionDeclaration[] = [
       "ดูบิลค่าใช้จ่ายของกลุ่มนี้ ได้รายการค่าใช้จ่าย ยอดต่อคน และใครจ่ายแล้วหรือยังไม่จ่าย ใช้เมื่อผู้ใช้ถามว่าคนละเท่าไหร่ ใครยังไม่จ่าย หรือขอดูบิล",
   },
   {
-    name: "propose_create_bill",
+    name: "start_bill",
     description:
-      "เสนอคิดเงิน ยังไม่ส่งบิลจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน " +
-      "ไม่ส่ง title = คิดเงินค่ารอบตีที่เปิดอยู่ ใช้ได้เฉพาะคนที่เปิดรอบ " +
-      "ส่ง title = บิลลอย ๆ ที่ไม่ผูกกับรอบ ใครในกลุ่มก็สร้างได้",
+      "เริ่มคิดเงินเมื่อผู้ใช้ยังไม่ได้บอกรายการกับจำนวนเงิน ระบบจะส่งการ์ดหรือคำถามไปให้ผู้ใช้ตอบเอง " +
+      "ไม่ส่ง kind = ขึ้นการ์ดให้เลือกว่าจะคิดค่ารอบ สร้างบิลใหม่ หรือแก้บิลเดิม ใช้เมื่อไม่ชัดว่าเงินเรื่องไหน เช่น \"คิดเงินหน่อย\" " +
+      "kind = new เมื่อบอกชัดว่าจะสร้างบิลใหม่หรือบิลเรื่องที่ไม่ใช่ค่ารอบ เช่น \"สร้างบิลใหม่\" \"คิดค่าข้าวหน่อย\" " +
+      "kind = game เมื่อบอกชัดว่าจะคิดค่ารอบตีที่เปิดอยู่ ใช้ได้เฉพาะคนที่เปิดรอบ " +
+      "kind = edit เมื่อจะแก้บิลที่ส่งไปแล้ว เพิ่มหรือลบรายการ ใช้ได้เฉพาะคนสร้างบิล",
     parameters: {
       type: Type.OBJECT,
-      properties: { ...billFields, ...billTitleOnCreate, ...billPayersField },
+      properties: {
+        kind: {
+          type: Type.STRING,
+          description: 'ใส่ได้ "game", "new" หรือ "edit" เท่านั้น ไม่แน่ใจว่าเรื่องไหนไม่ต้องส่ง',
+        },
+        title: {
+          type: Type.STRING,
+          description: "ชื่อบิลใหม่ ใส่เฉพาะ kind = new และผู้ใช้ตั้งชื่อมาเอง",
+        },
+      },
+    },
+  },
+  {
+    name: "propose_create_bill",
+    description:
+      "เสนอคิดเงินเมื่อรู้รายการกับจำนวนเงินแล้ว ยังไม่ส่งบิลจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน " +
+      "ไม่ส่ง title = คิดเงินค่ารอบตีที่เปิดอยู่ ใช้ได้เฉพาะคนที่เปิดรอบ " +
+      "ส่ง title = บิลลอย ๆ ที่ไม่ผูกกับรอบ ใครในกลุ่มก็สร้างได้ " +
+      "บิลลอย ๆ ที่ไม่ได้บอกเลขพร้อมเพย์ ระบบจะถามเลขก่อนขึ้นการ์ดยืนยัน",
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        ...billFields,
+        ...billTitleOnCreate,
+        ...billPayersField,
+        promptpay: {
+          type: Type.STRING,
+          description: "เลขพร้อมเพย์ที่ให้โอน ใส่เฉพาะเมื่อผู้ใช้บอกเลขมาในข้อความ",
+        },
+      },
     },
   },
   {
@@ -245,9 +276,17 @@ export const toolSchemas = {
   propose_cancel_game: noArgs,
   propose_close_game: noArgs,
   get_bill: z.object({ bill_title: z.string().trim().max(60) }).partial().strict(),
+  start_bill: z
+    .object({
+      kind: z.enum(["game", "new", "edit"]),
+      title: z.string().trim().min(1).max(60),
+    })
+    .partial()
+    .strict(),
   propose_create_bill: billDraftSchema
     .extend({
       title: z.string().trim().max(60),
+      promptpay: promptPaySchema,
       payers: z
         .array(
           z.object({

@@ -10,6 +10,7 @@ import {
   setListeningWindow,
 } from "@/repositories/session.repository";
 import type { LineMessage } from "@/lib/line";
+import type { PendingActionRow } from "@/repositories/pending-action.repository";
 import type { LineUserRow } from "@/repositories/types";
 import { formatErrorForLog } from "@/lib/log";
 import { easterEggReply } from "@/router/easter-eggs";
@@ -99,6 +100,31 @@ async function runRuleCommand(
   } finally {
     await setListeningWindow(groupId, userId, keepListening).catch(() => {});
   }
+}
+
+/**
+ * ชื่อบิลกับรายการที่พิมพ์ตอบปุ่ม "สร้างบิลใหม่" ให้ Gemini แปลงเป็นบิล
+ * ผู้ใช้กำลังตอบคำถามของบอทอยู่ ไม่ใช่โหมดฟัง ตีความไม่ออกจึงต้องได้คำตอบกลับไป ไม่ใช่เงียบ
+ */
+async function interpretNewBill(
+  pending: PendingActionRow,
+  text: string,
+  groupId: string,
+  userId: string,
+  context: EventContext,
+): Promise<LineMessage[]> {
+  const user = await ensureUser(groupId, userId, context.accessToken);
+  const reply = await runAgent({
+    text,
+    lineGroupId: groupId,
+    lineUserId: userId,
+    user,
+    client: createGeminiClient(),
+    newBill: { pendingId: pending.id, title: String(pending.payload.title ?? "") },
+  });
+
+  await openListeningWindow(groupId, userId).catch(() => {});
+  return reply.messages;
 }
 
 async function resolveMessages(
@@ -224,6 +250,12 @@ async function resolveMessages(
       ...(isText ? { text: messageText } : {}),
       ...(isLocation
         ? { location: { latitude: message.latitude!, longitude: message.longitude! } }
+        : {}),
+      ...(gemini
+        ? {
+            interpretBill: (pending: PendingActionRow, text: string) =>
+              interpretNewBill(pending, text, groupId, userId, context),
+          }
         : {}),
     });
     if (answered) return answered;

@@ -52,33 +52,7 @@ export async function insertBill(bill: NewBill, sql: Queryable): Promise<BillRow
   const created = rows[0];
   if (!created) throw new Error("insertBill returned no row");
 
-  for (const [index, item] of bill.items.entries()) {
-    const itemRows = await sql<{ id: string }[]>`
-      INSERT INTO bill_items (bill_id, position, label, quantity, unit_price_satang, amount_satang)
-      VALUES (
-        ${created.id},
-        ${index},
-        ${item.label},
-        ${item.quantity},
-        ${item.unitPriceSatang},
-        ${item.amountSatang}
-      )
-      RETURNING id
-    `;
-
-    const itemId = itemRows[0]?.id;
-    if (!itemId) throw new Error("insertBill item returned no row");
-
-    await sql`
-      INSERT INTO bill_item_payers ${sql(
-        item.payers.map((payer) => ({
-          bill_item_id: itemId,
-          user_id: payer.userId,
-          amount_satang: payer.amountSatang,
-        })),
-      )}
-    `;
-  }
+  await insertBillItems(created.id, bill.items, sql);
 
   await sql`
     INSERT INTO bill_shares ${sql(
@@ -91,6 +65,90 @@ export async function insertBill(bill: NewBill, sql: Queryable): Promise<BillRow
   `;
 
   return created;
+}
+
+/** รายการพร้อมคนร่วมจ่ายของแต่ละรายการ position เรียงตามลำดับที่ส่งมา เริ่มที่ 0 */
+async function insertBillItems(billId: string, items: NewBillItem[], sql: Queryable): Promise<void> {
+  for (const [index, item] of items.entries()) {
+    const itemRows = await sql<{ id: string }[]>`
+      INSERT INTO bill_items (bill_id, position, label, quantity, unit_price_satang, amount_satang)
+      VALUES (
+        ${billId},
+        ${index},
+        ${item.label},
+        ${item.quantity},
+        ${item.unitPriceSatang},
+        ${item.amountSatang}
+      )
+      RETURNING id
+    `;
+
+    const itemId = itemRows[0]?.id;
+    if (!itemId) throw new Error("insertBillItems returned no row");
+
+    await sql`
+      INSERT INTO bill_item_payers ${sql(
+        item.payers.map((payer) => ({
+          bill_item_id: itemId,
+          user_id: payer.userId,
+          amount_satang: payer.amountSatang,
+        })),
+      )}
+    `;
+  }
+}
+
+/**
+ * แทนรายการทั้งหมดของบิลด้วยชุดใหม่ ใช้ตอนแก้บิล (เพิ่ม/ลบรายการ)
+ * ลบของเดิมทิ้งแล้วใส่ใหม่ทั้งชุด คนร่วมจ่ายของรายการเดิมหลุดตามด้วย ON DELETE CASCADE
+ * ผู้เรียกต้องครอบ transaction ไว้เสมอ ล้มกลางทางต้องไม่เหลือบิลที่ไม่มีรายการ
+ */
+export async function replaceBillItems(
+  billId: string,
+  items: NewBillItem[],
+  totalSatang: number,
+  sql: Queryable,
+): Promise<void> {
+  await sql`DELETE FROM bill_items WHERE bill_id = ${billId}`;
+  await insertBillItems(billId, items, sql);
+  await sql`UPDATE bills SET total_satang = ${totalSatang}, updated_at = now() WHERE id = ${billId}`;
+}
+
+/**
+ * ปรับยอดของทุกคนในบิลให้ตรงกับชุดใหม่ ใช้ตอนแก้บิล
+ *
+ * - ยอดเท่าเดิม → สถานะการจ่ายเหมือนเดิม
+ * - ยอดเปลี่ยน → กลับเป็นยังไม่จ่าย เพราะที่บอกว่าจ่ายไปแล้วไม่ใช่ยอดนี้
+ * - คนใหม่ → ยังไม่จ่าย, คนที่ไม่เหลือรายการไหนแล้ว → ออกจากบิล
+ *
+ * ทางขวาของ SET อ่านค่าเดิมของแถวทั้งหมด จึงเทียบยอดเก่ากับยอดใหม่ได้ในคำสั่งเดียว
+ */
+export async function syncBillShares(
+  billId: string,
+  shares: NewBillShare[],
+  sql: Queryable,
+): Promise<void> {
+  await sql`
+    INSERT INTO bill_shares ${sql(
+      shares.map((share) => ({
+        bill_id: billId,
+        user_id: share.userId,
+        amount_satang: share.amountSatang,
+      })),
+    )}
+    ON CONFLICT (bill_id, user_id) DO UPDATE
+    SET amount_satang = EXCLUDED.amount_satang,
+        paid = bill_shares.paid AND bill_shares.amount_satang = EXCLUDED.amount_satang,
+        paid_at = CASE WHEN bill_shares.amount_satang = EXCLUDED.amount_satang THEN bill_shares.paid_at END,
+        paid_by = CASE WHEN bill_shares.amount_satang = EXCLUDED.amount_satang THEN bill_shares.paid_by END
+  `;
+
+  // เทียบเป็นข้อความ เพราะ id ที่ driver คืนมาเป็น string ส่วนคอลัมน์เป็น BIGINT
+  await sql`
+    DELETE FROM bill_shares
+    WHERE bill_id = ${billId}
+      AND user_id::text <> ALL(${shares.map((share) => share.userId)})
+  `;
 }
 
 /**
@@ -107,6 +165,27 @@ export async function listActiveBills(
     FROM bills
     WHERE line_group_id = ${lineGroupId} AND status = 'sent'
     ORDER BY id DESC
+  `;
+}
+
+/**
+ * บิลที่คนนี้แก้ได้: ยังเปิดอยู่ เขาเป็นคนสร้าง และมีรายการอยู่ในตาราง bill_items
+ * บิลที่สร้างก่อน migration 013 เก็บรายการไว้ใน jsonb เท่านั้น แก้แล้วยอดเดิมจะหายหมด จึงไม่นับ
+ */
+export async function listEditableBills(
+  lineGroupId: string,
+  createdBy: string,
+  sql: Queryable = getSql(),
+): Promise<BillRow[]> {
+  return sql<BillRow[]>`
+    SELECT b.id, b.line_group_id, b.game_id, b.created_by, b.title, b.status, b.promptpay,
+           b.items, b.total_satang::int AS total_satang
+    FROM bills b
+    WHERE b.line_group_id = ${lineGroupId}
+      AND b.status = 'sent'
+      AND b.created_by = ${createdBy}
+      AND EXISTS (SELECT 1 FROM bill_items bi WHERE bi.bill_id = b.id)
+    ORDER BY b.id DESC
   `;
 }
 
@@ -263,16 +342,23 @@ export async function findLastShuttlePrice(
   return rows[0]?.unit_price_satang ?? null;
 }
 
-/** เลขพร้อมเพย์ที่คนนี้เคยใช้ล่าสุด เสนอเป็นตัวเลือกแรกตอนสร้างบิลใหม่ (PRP §5.2.1) */
+/**
+ * เลขพร้อมเพย์ที่คนนี้เคยใช้ล่าสุด เสนอเป็นตัวเลือกแรกตอนสร้างบิลใหม่ (PRP §5.2.1)
+ * ดูทั้งบิลและรอบตีที่เขาเป็นคนสร้าง คนที่เคยแต่เปิดรอบก็มีเลขให้เสนอตั้งแต่บิลแรก
+ * ไม่ใช้เลขล่าสุดของกลุ่ม เพราะเงินจะไปเข้าบัญชีคนที่ไม่ได้สร้างบิล
+ */
 export async function findLastPromptPayOf(
   createdBy: string,
   sql: Queryable = getSql(),
 ): Promise<string | null> {
   const rows = await sql<{ promptpay: string }[]>`
     SELECT promptpay
-    FROM bills
-    WHERE created_by = ${createdBy} AND promptpay IS NOT NULL
-    ORDER BY id DESC
+    FROM (
+      SELECT promptpay, created_at FROM bills WHERE created_by = ${createdBy} AND promptpay IS NOT NULL
+      UNION ALL
+      SELECT promptpay, created_at FROM games WHERE created_by = ${createdBy} AND promptpay IS NOT NULL
+    ) used
+    ORDER BY created_at DESC
     LIMIT 1
   `;
   return rows[0]?.promptpay ?? null;

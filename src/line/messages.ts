@@ -1,5 +1,5 @@
 import type { ErrorCode } from "@/errors/app-errors";
-import type { FlexComponent, FlexMessage, LineMessage, TextMessage } from "@/lib/line";
+import type { FlexBox, FlexComponent, FlexMessage, LineMessage, TextMessage } from "@/lib/line";
 import {
   amountRow,
   bubble,
@@ -10,6 +10,7 @@ import {
   header,
   heading,
   type Headline,
+  icon,
   type IconName,
   infoRow,
   note,
@@ -22,7 +23,13 @@ import { addDays, formatDuration, formatThaiDate, formatTimeRange, todayInBangko
 import type { PendingActionType } from "@/repositories/pending-action.repository";
 import { WAKE_WORD } from "@/router/wake-word";
 import { MAX_PLAYERS, MIN_PLAYERS, type GameDraft } from "@/services/game.service";
-import { summarize, toBaht } from "@/services/bill.service";
+import {
+  summarize,
+  toBaht,
+  type BillEditPlan,
+  type BillMenuOptions,
+  type GameBillBlock,
+} from "@/services/bill.service";
 import type { BillItemRow, BillRow, BillShareRow } from "@/repositories/types";
 import type { EditPatch } from "@/services/game-admin.service";
 import type { GameRow } from "@/repositories/types";
@@ -662,6 +669,8 @@ export function actionRejected(actionType: PendingActionType): TextMessage {
       return text("ได้ครับพี่ ยังไม่ได้คิดเงินนะ");
     case "cancel_bill":
       return text("ได้ครับพี่ บิลเดิมยังอยู่");
+    case "edit_bill":
+      return text("ได้ครับพี่ บิลยังเหมือนเดิม");
     default:
       return text("ได้ครับพี่ รอบตียังเปิดอยู่เหมือนเดิม");
   }
@@ -814,6 +823,7 @@ export function confirmBill(
   items: BillItemRow[],
   totalSatang: number,
   shares: BillShareRow[],
+  promptpay: string | null = null,
 ): FlexMessage {
   return flexMessage(
     "ส่งบิลเข้ากลุ่มเลยไหม?",
@@ -824,6 +834,13 @@ export function confirmBill(
           ...billBody(title, items, totalSatang, shares),
           separator("lg"),
           vbox(shareRows(shares), { spacing: "sm", margin: "lg" }),
+          // เลขโอนต้องให้เห็นก่อนส่ง พิมพ์ผิดหลักเดียวเงินก็ไปผิดคน
+          ...(promptpay
+            ? [
+                separator("lg"),
+                vbox([infoRow("money-bill-wave", `พร้อมเพย์ ${formatPromptPay(promptpay)}`)], { margin: "lg" }),
+              ]
+            : []),
         ],
         { paddingAll: "20px" },
       ),
@@ -1028,6 +1045,225 @@ export function confirmCancelBill(
 
 export function billCancelled(): TextMessage {
   return text('🗑️ ยกเลิกบิลแล้ว\n\nคิดใหม่ได้ด้วย "บอทจ๋า คิดเงิน"');
+}
+
+/** LINE ปฏิเสธป้ายปุ่มที่ยาวเกิน 40 ตัวอักษร ส่วนชื่อบิลกับชื่อรายการตั้งเองได้ยาวกว่านั้น */
+const MAX_ACTION_LABEL = 40;
+
+function fitLabel(label: string): string {
+  return label.length <= MAX_ACTION_LABEL ? label : `${label.slice(0, MAX_ACTION_LABEL - 1)}…`;
+}
+
+/** เหตุผลที่คิดค่ารอบไม่ได้ ทั้งที่มีรอบเปิดอยู่ */
+export function gameBillBlockedNote(game: GameRow, reason: GameBillBlock): string {
+  const date = formatThaiDate(game.play_date);
+  return reason === "not_creator"
+    ? `คิดค่ารอบ ${date} ได้เฉพาะคนที่เปิดรอบ`
+    : `รอบ ${date} ยังไม่มีใครลงชื่อ เลยยังคิดค่ารอบไม่ได้`;
+}
+
+/**
+ * "คิดเงิน" เฉย ๆ ถามก่อนว่าเงินเรื่องไหน (spec §23 กรณีกำลังถาม)
+ * ปุ่มที่ใช้ไม่ได้ไม่ขึ้น แต่บอกเหตุผลไว้ใต้คำถาม คนกดจะได้ไม่งงว่าปุ่มคิดค่ารอบหายไปไหน
+ * วันที่ของรอบอยู่ในตัวการ์ด ไม่ใส่ในป้ายปุ่ม เพราะปุ่มครึ่งแถวใส่ได้แค่ราวสิบกว่าตัวอักษร
+ */
+export function billMenu(pendingId: string, options: BillMenuOptions): FlexMessage {
+  const { game, gameBlocked, editableBills } = options;
+
+  const details: FlexComponent[] = game
+    ? [
+        infoRow(
+          "table-tennis-paddle-ball",
+          `รอบ ${formatThaiDate(game.play_date)}${game.court_name ? ` · ${game.court_name}` : ""}`,
+        ),
+      ]
+    : gameBlocked
+      ? [note(gameBillBlockedNote(gameBlocked.game, gameBlocked.reason))]
+      : [];
+
+  return questionCard({ icon: "calculator", text: "คิดเงินอะไรดี?" }, details, [
+    ...(game ? [choice("คิดค่ารอบ", wizardData(pendingId, "bill_kind", "game"), "table-tennis-paddle-ball")] : []),
+    choice("สร้างบิลใหม่", wizardData(pendingId, "bill_kind", "new"), "plus"),
+    ...(editableBills.length > 0 ? [choice("แก้บิลเดิม", wizardData(pendingId, "bill_kind", "edit"), "pen")] : []),
+  ]);
+}
+
+/**
+ * ขอชื่อบิลกับรายการ พิมพ์มาอิสระได้เลย บอทให้ Gemini แปลงเป็นบิล
+ * เป็นข้อความธรรมดาเพราะไม่มีปุ่มให้กด (spec §23)
+ */
+export function askNewBillDetails(title = "", reason = ""): TextMessage {
+  return text(
+    [
+      ...(reason ? [`ℹ️ ${reason}`, ""] : []),
+      title
+        ? `🧾 พิมพ์รายการของบิล "${title}" มาได้เลย บรรทัดละรายการ`
+        : "🧾 พิมพ์ชื่อบิลกับรายการมาได้เลย บรรทัดละรายการ",
+      "",
+      "เช่น",
+      ...(title ? [] : ["บิล ร้านข้าวต้ม"]),
+      "ค่าข้าว 900 เชวง แบงค์ กิ้ฟ",
+      "ค่าน้ำ 60 เชวง แบงค์",
+      "",
+      "ไม่ใส่ชื่อ = เก็บทุกคนในบิล",
+    ].join("\n"),
+  );
+}
+
+/** ไม่มี Gemini ให้ตีความประโยคอิสระ ต้องตั้งชื่อบิลมากับคำสั่งแล้วตอบทีละขั้นแบบเดิม */
+export function askNewBillCommand(reason = ""): TextMessage {
+  return text(
+    [
+      ...(reason ? [`ℹ️ ${reason}`, ""] : []),
+      `🧾 พิมพ์ "${WAKE_WORD} คิดเงิน <ชื่อบิล>" เพื่อสร้างบิลใหม่`,
+      `เช่น "${WAKE_WORD} คิดเงิน ค่ากินข้าว"`,
+    ].join("\n"),
+  );
+}
+
+/** บิลที่ให้เลือกแก้ได้ต่อครั้ง กลุ่มจริงมีบิลค้างพร้อมกันไม่กี่ใบ */
+const MAX_BILL_CHOICES = 6;
+
+/** แก้ได้หลายใบ ถามก่อนว่าใบไหน ป้ายเป็นชื่อบิลซึ่งยาวได้ จึงเรียงแถวละปุ่ม */
+export function askWhichBillToEdit(pendingId: string, bills: BillRow[]): FlexMessage {
+  return questionCard(
+    { icon: "pen", text: "แก้บิลไหน?" },
+    [],
+    bills
+      .slice(0, MAX_BILL_CHOICES)
+      .map((bill) => choice(fitLabel(bill.title), wizardData(pendingId, "edit_bill", bill.id), "receipt")),
+    1,
+  );
+}
+
+/** รายการที่กำลังจะลบ ขีดฆ่าไว้ให้เห็นว่าอะไรหายไปก่อนกดยืนยัน */
+function removedItemRow(item: BillItemRow): FlexBox {
+  const struck = { size: "sm", color: COLOR.muted, decoration: "line-through" } as const;
+
+  return {
+    type: "box",
+    layout: "baseline",
+    spacing: "md",
+    contents: [
+      icon("xmark", "warn"),
+      { type: "text", text: itemLabel(item), flex: 4, wrap: true, ...struck },
+      { type: "text", text: formatBaht(item.amount_satang), align: "end", flex: 2, ...struck },
+    ],
+  };
+}
+
+/**
+ * การ์ดแก้บิล: หน้าตาบิลหลังแก้ ให้ตรวจก่อนกดยืนยัน
+ * รายการใหม่มีป้าย "(ใหม่)" รายการที่จะลบขีดฆ่าไว้ และเตือนว่าใครจะกลับเป็นยังไม่จ่าย
+ * ยังไม่ได้แก้อะไรก็ยังไม่มีปุ่มยืนยัน มีแค่ปุ่มเพิ่ม/ลบรายการ
+ */
+export function editBillCard(
+  pendingId: string,
+  bill: BillRow,
+  plan: BillEditPlan,
+  names: Map<string, string>,
+  canAddMore = true,
+): FlexMessage {
+  const nameOf = (userId: string) => names.get(userId) ?? "แขก";
+  const listOf = (shares: BillShareRow[]) => shares.map((share) => share.display_name).join(", ");
+
+  const itemRows = plan.items.map((item) =>
+    vbox(
+      [
+        amountRow(
+          item.added ? `${item.label} (ใหม่)` : itemLabel({ ...item, unit_price_satang: item.unitPriceSatang }),
+          formatBaht(item.amountSatang),
+          false,
+          item.added ? "plus" : itemIcon(item.label),
+        ),
+        note(payerLabel(item.payers.map((payer) => ({ display_name: nameOf(payer.userId) })), plan.shares.length)),
+      ],
+      { spacing: "none" },
+    ),
+  );
+
+  const warnings = [
+    ...(plan.resetPaid.length > 0
+      ? [note(`${listOf(plan.resetPaid)} บอกว่าจ่ายแล้ว แต่ยอดเปลี่ยน จะกลับเป็นยังไม่จ่าย`, COLOR.warn)]
+      : []),
+    ...(plan.droppedPaid.length > 0
+      ? [note(`${listOf(plan.droppedPaid)} จ่ายแล้วแต่ไม่อยู่ในบิลแล้ว บันทึกการจ่ายจะหายไปด้วย`, COLOR.warn)]
+      : []),
+  ];
+
+  const [confirmButton, rejectButton] = confirmActions(pendingId, "ยืนยันแก้บิล");
+  const editButtons: Button[] = [
+    ...(canAddMore ? [choice("เพิ่มรายการ", wizardData(pendingId, "edit", "add"), "plus")] : []),
+    // ห้ามลบจนไม่เหลือรายการ บิลที่ไม่มีรายการไม่ใช่บิล ต้องยกเลิกบิลแทน
+    ...(plan.items.length > 1 ? [choice("ลบรายการ", wizardData(pendingId, "edit", "remove"), "list")] : []),
+  ];
+
+  return flexMessage(
+    `แก้บิล ${bill.title}`,
+    bubble({
+      header: header({ icon: "pen", text: "แก้บิล" }),
+      body: vbox(
+        [
+          title(bill.title),
+          vbox([...itemRows, ...plan.removed.map(removedItemRow)], { spacing: "md", margin: "lg" }),
+          separator("lg"),
+          vbox(
+            [
+              amountRow("รวม", formatBaht(plan.totalSatang), true),
+              ...(plan.totalSatang !== bill.total_satang ? [note(`เดิม ${formatBaht(bill.total_satang)}`)] : []),
+            ],
+            { margin: "lg" },
+          ),
+          separator("lg"),
+          vbox(
+            plan.shares.map((share) => amountRow(nameOf(share.userId), formatBaht(share.amountSatang))),
+            { spacing: "sm", margin: "lg" },
+          ),
+          ...warnings,
+        ],
+        { paddingAll: "20px" },
+      ),
+      footer: footerButtons(
+        plan.changed && confirmButton && rejectButton
+          ? [confirmButton, rejectButton, ...editButtons]
+          : [...editButtons, ...(rejectButton ? [rejectButton] : [])],
+      ),
+    }),
+  );
+}
+
+/** เลือกรายการที่จะลบ ป้ายมีทั้งชื่อรายการและยอด จึงเรียงแถวละปุ่ม */
+export function askWhichItemToRemove(pendingId: string, plan: BillEditPlan): FlexMessage {
+  return questionCard(
+    { icon: "list", text: "ลบรายการไหน?" },
+    [],
+    [
+      ...plan.items.map((item) =>
+        choice(
+          fitLabel(`${item.label} ${formatBaht(item.amountSatang)}`),
+          wizardData(pendingId, "edit_remove", item.ref),
+          "xmark",
+        ),
+      ),
+      choice("กลับ", wizardData(pendingId, "edit", "back"), "arrow-left"),
+    ],
+    1,
+  );
+}
+
+/** ขอรายการที่จะเพิ่มเข้าบิล รูปแบบเดียวกับตอนสร้างบิล */
+export function askEditItems(): TextMessage {
+  return text(
+    [
+      "➕ พิมพ์รายการที่จะเพิ่มได้เลย บรรทัดละรายการ",
+      "",
+      "เช่น",
+      "ค่าน้ำแข็ง 40",
+      "ค่าขนม 120 เชวง แบงค์",
+      "",
+      "ไม่ใส่ชื่อ = เก็บทุกคนในบิล",
+    ].join("\n"),
+  );
 }
 
 /**

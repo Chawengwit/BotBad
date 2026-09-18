@@ -1,17 +1,32 @@
-import { AppError } from "@/errors/app-errors";
+import { AppError, isAppError } from "@/errors/app-errors";
 import type { LineMessage } from "@/lib/line";
-import { askAgain, askLocation, askOtherItem, askPromptPay } from "@/line/messages";
 import {
+  actionRejected,
+  askAgain,
+  askLocation,
+  askNewBillCommand,
+  askOtherItem,
+  askPromptPay,
+  errorMessage,
+} from "@/line/messages";
+import {
+  expirePendingAction,
   findAwaitingPendingAction,
   type PendingActionRow,
   type PendingPayload,
 } from "@/repositories/pending-action.repository";
+import { findLastPromptPayOf } from "@/repositories/bill.repository";
 import { findLatestPromptPay } from "@/repositories/game.repository";
 import { parseAmount, parseItemLine } from "@/services/bill.service";
 import { resolveOrCreateGuests } from "@/services/people.service";
 import { findUserById } from "@/repositories/user.repository";
 import { courtNameSchema, locationUrlSchema, promptPaySchema } from "@/services/game.service";
+import { doAddBillItems } from "./bill-actions";
+import { isSmallTalk, isStopWord } from "./listening";
 import { advanceBillWizard, advanceCreateWizard, advanceEditWizard } from "./wizard";
+
+/** แปลงชื่อบิลกับรายการที่พิมพ์มาอิสระให้เป็นบิล ทำด้วย Gemini จึงต้องให้คนเรียกส่งมาให้ */
+export type BillInterpreter = (pending: PendingActionRow, text: string) => Promise<LineMessage[]>;
 
 const URL_IN_TEXT = /https?:\/\/[^\s]+/;
 
@@ -157,6 +172,56 @@ async function addItemWithPayers(
   return advanceBillWizard(pending, patch);
 }
 
+/** บิลลอย ๆ ใช้เลขของคนสร้างบิลเอง พิมพ์มาเองก็ได้ (PRP §5.2.1) */
+async function applyBillPromptPay(pending: PendingActionRow, text: string): Promise<LineMessage[]> {
+  const parsed = promptPaySchema.safeParse(text);
+  if (!parsed.success) {
+    return [
+      askAgain("💸 เลขพร้อมเพย์ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก"),
+      askPromptPay(pending.id, await findLastPromptPayOf(pending.requested_by)),
+    ];
+  }
+
+  return advanceBillWizard(pending, { promptpay: parsed.data, promptpay_asked: true });
+}
+
+/**
+ * ชื่อบิลกับรายการที่พิมพ์มาอิสระหลังกด "สร้างบิลใหม่" ส่งให้ Gemini แปลงเป็นบิล
+ * บอกว่าไม่เอาแล้วก็เลิกรอ ส่วนคำรับคำสั้น ๆ ไม่ใช่รายการ ปล่อยผ่านโดยไม่เสียโควตา LLM
+ */
+async function answerNewBill(
+  pending: PendingActionRow,
+  text: string,
+  interpret: BillInterpreter | undefined,
+): Promise<LineMessage[] | null> {
+  if (isStopWord(text)) {
+    await expirePendingAction(pending.id, pending.line_group_id);
+    return [actionRejected("create_bill")];
+  }
+  if (isSmallTalk(text)) return null;
+
+  // ถอดคีย์ Gemini ออกระหว่างรอคำตอบ ตีความประโยคอิสระไม่ได้แล้ว ให้ไปทางคำสั่งแบบเดิม
+  if (!interpret) {
+    await expirePendingAction(pending.id, pending.line_group_id);
+    return [askNewBillCommand()];
+  }
+
+  return interpret(pending, text);
+}
+
+/**
+ * ขั้นที่ตอบแล้วทำไม่ได้ ต้องบอกเหตุผล ไม่ใช่เงียบแบบข้อความทั่วไปในกลุ่ม
+ * คนพิมพ์กำลังตอบคำถามของบอทอยู่ ถ้าเงียบจะไม่รู้ว่าต้องทำอะไรต่อ เช่น ชื่อคนซ้ำกันหลายคน
+ */
+async function explainErrors(run: () => Promise<LineMessage[]>): Promise<LineMessage[]> {
+  try {
+    return await run();
+  } catch (error) {
+    if (isAppError(error)) return [errorMessage(error.code, error.details)];
+    throw error;
+  }
+}
+
 /**
  * ข้อความที่ไม่มี wake word จะถูกอ่านก็ต่อเมื่อบอทกำลังรอคำตอบจากคนคนนั้นอยู่จริง (spec §6)
  * คืน null แปลว่าไม่เกี่ยวกับบอท ให้เงียบไว้
@@ -166,11 +231,36 @@ export async function handleTextAnswer(input: {
   lineUserId: string;
   text?: string;
   location?: SharedLocation;
+  /** ไม่มี = ตั้งค่า Gemini ไว้ไม่ครบ บิลที่พิมพ์มาอิสระตีความไม่ได้ */
+  interpretBill?: BillInterpreter;
 }): Promise<LineMessage[] | null> {
   const pending = await findAwaitingPendingAction(input.lineGroupId, input.lineUserId);
   if (!pending) return null;
 
   const awaiting = pending.payload.awaiting;
+
+  if (awaiting === "bill_freeform") {
+    if (input.text === undefined) return null;
+    return answerNewBill(pending, input.text, input.interpretBill);
+  }
+
+  if (awaiting === "bill_promptpay") {
+    const text = input.text;
+    if (text === undefined) return null;
+    return explainErrors(() => applyBillPromptPay(pending, text));
+  }
+
+  if (awaiting === "bill_edit_add") {
+    const text = input.text;
+    if (text === undefined) return null;
+
+    // บอกว่าไม่แก้แล้ว เลิกทั้งการแก้บิลครั้งนี้ บิลเดิมไม่เปลี่ยน
+    if (isStopWord(text)) {
+      await expirePendingAction(pending.id, pending.line_group_id);
+      return [actionRejected("edit_bill")];
+    }
+    return explainErrors(() => doAddBillItems(pending, text));
+  }
 
   if (awaiting === "court_name") {
     if (input.text === undefined) return null;

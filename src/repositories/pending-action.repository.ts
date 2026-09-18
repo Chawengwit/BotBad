@@ -6,7 +6,8 @@ export type PendingActionType =
   | "cancel_game"
   | "close_game"
   | "create_bill"
-  | "cancel_bill";
+  | "cancel_bill"
+  | "edit_bill";
 
 /** payload เก็บลง jsonb จึงรับได้เฉพาะค่าที่แปลงเป็น JSON ได้ */
 export type PendingPayloadValue =

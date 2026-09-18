@@ -10,7 +10,10 @@ import {
   listActiveBillsByGame,
   listBillItems,
   listBillShares,
+  listEditableBills,
   markSharePaid,
+  replaceBillItems,
+  syncBillShares,
   type NewBillItem,
   type NewBillShare,
 } from "@/repositories/bill.repository";
@@ -18,7 +21,10 @@ import { findGameById, findOpenGame } from "@/repositories/game.repository";
 import {
   consumePendingAction,
   createPendingAction,
+  findUsablePendingAction,
+  updatePendingPayload,
   type PendingActionRow,
+  type PendingPayload,
 } from "@/repositories/pending-action.repository";
 import { findAddedBy, listJoinedPlayers } from "@/repositories/player.repository";
 import { formatThaiDate } from "@/lib/time";
@@ -229,24 +235,34 @@ export async function startCreateBill(
   title = "",
 ): Promise<{ pending: PendingActionRow; game: GameRow | null; title: string }> {
   const wanted = title.trim();
+  return wanted ? startStandaloneBill(lineGroupId, userId, wanted) : startGameBill(lineGroupId, userId);
+}
 
-  if (wanted) {
-    if (await findActiveBillByTitle(lineGroupId, wanted)) {
-      throw new AppError("BILL_TITLE_TAKEN", { title: wanted });
-    }
+/** บิลลอย ๆ ชื่อต้องไม่ซ้ำกับบิลที่ยังเปิดอยู่ของกลุ่ม */
+async function startStandaloneBill(
+  lineGroupId: string,
+  userId: string,
+  title: string,
+): Promise<{ pending: PendingActionRow; game: null; title: string }> {
+  await requireFreeTitle(lineGroupId, title);
 
-    return {
-      game: null,
-      title: wanted,
-      pending: await createPendingAction({
-        lineGroupId,
-        requestedBy: userId,
-        actionType: "create_bill",
-        payload: { title: wanted },
-      }),
-    };
-  }
+  return {
+    game: null,
+    title,
+    pending: await createPendingAction({
+      lineGroupId,
+      requestedBy: userId,
+      actionType: "create_bill",
+      payload: { title },
+    }),
+  };
+}
 
+/** บิลค่ารอบที่เปิดอยู่ ชื่อตั้งให้เอง */
+export async function startGameBill(
+  lineGroupId: string,
+  userId: string,
+): Promise<{ pending: PendingActionRow; game: GameRow; title: string }> {
   const game = await requireBillableGame(lineGroupId, userId);
   const autoTitle = await defaultBillTitle(lineGroupId, game);
 
@@ -263,6 +279,66 @@ export async function startCreateBill(
   };
 }
 
+export async function requireFreeTitle(lineGroupId: string, title: string): Promise<void> {
+  if (await findActiveBillByTitle(lineGroupId, title)) {
+    throw new AppError("BILL_TITLE_TAKEN", { title });
+  }
+}
+
+/** ทำไมคิดค่ารอบไม่ได้ ทั้งที่มีรอบเปิดอยู่ */
+export type GameBillBlock = "not_creator" | "no_players";
+
+export type BillMenuOptions = {
+  /** รอบที่คิดค่ารอบได้ตอนนี้ null = ไม่มีปุ่มคิดค่ารอบ */
+  game: GameRow | null;
+  /** มีรอบเปิดอยู่แต่คิดค่ารอบไม่ได้ บอกเหตุผลใต้คำถาม ไม่ใช่ให้ปุ่มหายไปเฉย ๆ */
+  gameBlocked: { game: GameRow; reason: GameBillBlock } | null;
+  /** บิลที่คนนี้แก้ได้ (เขาสร้างเอง) */
+  editableBills: BillRow[];
+};
+
+/**
+ * "คิดเงิน" เฉย ๆ ไม่บอกว่าเงินเรื่องไหน ถามก่อนทุกครั้งแทนการเดาว่าเป็นค่ารอบ
+ * เพราะหลังตีเสร็จคนก็คิดค่ากินข้าวกันด้วย ถ้าเดาผิดต้องตอบค่าคอร์ทไปห้าคำถามถึงจะรู้ตัว
+ */
+export async function billMenuOptions(lineGroupId: string, userId: string): Promise<BillMenuOptions> {
+  const [game, editableBills] = await Promise.all([
+    findOpenGame(lineGroupId),
+    listEditableBills(lineGroupId, userId),
+  ]);
+
+  if (!game) return { game: null, gameBlocked: null, editableBills };
+  if (game.created_by !== userId) {
+    return { game: null, gameBlocked: { game, reason: "not_creator" }, editableBills };
+  }
+  if ((await listJoinedPlayers(game.id)).length === 0) {
+    return { game: null, gameBlocked: { game, reason: "no_players" }, editableBills };
+  }
+  return { game, gameBlocked: null, editableBills };
+}
+
+/**
+ * เริ่มบิลใหม่ที่ไม่ผูกกับรอบ ให้พิมพ์ชื่อบิลกับรายการมาอิสระแล้วให้ Gemini แปลง
+ *
+ * awaiting ทำให้ข้อความถัดไปของคนนี้มาที่บิลใบนี้ก่อนอย่างอื่น
+ * ไม่งั้น "บิล ร้านโชคดี ..." จะหลุดไปเป็นคำสั่งดูบิล
+ */
+export async function startNewBill(
+  lineGroupId: string,
+  userId: string,
+  title = "",
+): Promise<PendingActionRow> {
+  const wanted = title.trim();
+  if (wanted) await requireFreeTitle(lineGroupId, wanted);
+
+  return createPendingAction({
+    lineGroupId,
+    requestedBy: userId,
+    actionType: "create_bill",
+    payload: { ...(wanted ? { title: wanted } : {}), awaiting: "bill_freeform" },
+  });
+}
+
 /**
  * ผู้ใช้พิมพ์จำนวนเงินมาได้หลายแบบ ("600", "600 บาท", "600.50")
  * คืน null เมื่อไม่ใช่จำนวนเงินที่รับได้ ให้ผู้เรียกไปถามใหม่
@@ -277,17 +353,25 @@ export function parseAmount(text: string): number | null {
 
 export type ParsedItemLine = { label: string; amount: number; payerNames: string[] };
 
+/** หัวข้อย่อยที่คนชอบพิมพ์นำหน้ารายการ เช่น "- ค่าข้าว 1500" หรือ "1. ค่าน้ำ 100" */
+const ITEM_BULLET = /^\s*(?:[-*•·]\s*|\d+[.)]\s+)/u;
+
+/** คำที่คนพิมพ์คั่นก่อนรายชื่อ เช่น "ค่าข้าว 1500 คิด วิท ฮก" ไม่ใช่ชื่อคน ถ้าเก็บไว้จะได้แขกชื่อ "คิด" */
+const PAYER_LEAD_WORD = /^(?:คิด|หาร|เก็บ)(?:\s+|$)/u;
+
 /**
  * รายการพิมพ์มาบรรทัดเดียว `<ชื่อรายการ> <จำนวนเงิน> [ชื่อคน ...]`
  * (PRP guests-split-bills-and-digest §5.3)
  *
  *   ค่าเช่าไม้ 100              → เก็บทุกคนในบิล
  *   ค่าน้ำ 60 เชวง แบงค์        → เก็บสองคนนี้
+ *   - ค่าข้าว 1500 คิด วิท ฮก   → ตัด "-" กับ "คิด" ออก เก็บวิทกับฮก
  *
  * จำนวนเงินเป็นตัวคั่นระหว่างชื่อรายการกับรายชื่อคน จึงไม่ต้องเดาว่าคำไหนเป็นชื่อใคร
  */
 export function parseItemLine(text: string): ParsedItemLine | null {
-  const match = text.trim().match(/^(.*?)[\s:]*([\d.,]+)\s*(?:บาท)?(?:\s+(.*))?$/u);
+  const line = text.trim().replace(ITEM_BULLET, "");
+  const match = line.match(/^(.*?)[\s:]*([\d.,]+)\s*(?:บาท)?(?:\s+(.*))?$/u);
   if (!match) return null;
 
   const amount = parseAmount(match[2] ?? "");
@@ -296,7 +380,20 @@ export function parseItemLine(text: string): ParsedItemLine | null {
   const parsed = otherItemSchema.safeParse({ label: match[1] ?? "", amount });
   if (!parsed.success) return null;
 
-  return { ...parsed.data, payerNames: parseNames(match[3] ?? "") };
+  const names = (match[3] ?? "").trim().replace(PAYER_LEAD_WORD, "");
+  return { ...parsed.data, payerNames: parseNames(names) };
+}
+
+/**
+ * หลายรายการในข้อความเดียว บรรทัดละรายการ บรรทัดว่างข้ามไป
+ * คืน null ถ้ามีบรรทัดไหนอ่านไม่ออก จะได้ไม่เพิ่มแค่บางรายการแล้วคนพิมพ์ไม่รู้ตัว
+ */
+export function parseItemLines(text: string): ParsedItemLine[] | null {
+  const lines = text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  if (lines.length === 0) return null;
+
+  const parsed = lines.map(parseItemLine);
+  return parsed.every((item) => item !== null) ? (parsed as ParsedItemLine[]) : null;
 }
 
 /** รายการอื่น ๆ แบบไม่สนใจว่าใครร่วมจ่าย ใช้ในที่ที่ยังไม่รองรับการเลือกคน */
@@ -522,6 +619,249 @@ export async function confirmCancelBill(
 
     await cancelBillRow(bill.id, tx);
   });
+}
+
+/**
+ * บิลที่เริ่มจากปุ่ม "สร้างบิลใหม่" ให้ใช้ pending ใบเดิมต่อ ไม่สร้างใบใหม่
+ * ชื่อที่ตั้งไว้กับคำสั่งมาก่อน ("คิดเงิน ร้านโชคดี") ชนะชื่อที่ LLM อ่านได้ทีหลัง
+ * ยังไม่มีชื่อเลยต้องถามก่อน บิลลอย ๆ อ้างถึงด้วยชื่อ
+ */
+export async function continueNewBill(
+  pendingId: string,
+  lineGroupId: string,
+  userId: string,
+  askedTitle: string,
+): Promise<PendingActionRow> {
+  const pending = await findUsablePendingAction(pendingId, lineGroupId);
+  if (!pending || pending.action_type !== "create_bill" || pending.game_id !== null) {
+    throw new AppError("PENDING_EXPIRED");
+  }
+  if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
+
+  const title = String(pending.payload.title ?? "").trim() || askedTitle.trim();
+  if (!title) throw new AppError("MISSING_FIELDS", { missing: ["title"] });
+  await requireFreeTitle(lineGroupId, title);
+
+  const saved = await updatePendingPayload(pending.id, { title });
+  if (!saved) throw new AppError("PENDING_EXPIRED");
+  return saved;
+}
+
+/** แก้บิลครั้งหนึ่งเพิ่มรายการได้ไม่เกินจำนวนรายการอื่น ๆ ตอนสร้างบิล */
+export const MAX_ADDED_ITEMS = MAX_OTHER_ITEMS;
+
+/** รายการที่จะเพิ่มตอนแก้บิล เก็บไว้ใน payload ของ pending จนกว่าจะกดยืนยัน */
+export type AddedItem = { label: string; amount: number; payer_ids: string[] };
+
+const editStateSchema = z.object({
+  bill_id: z.string().min(1),
+  add_items: z
+    .array(z.object({ label: z.string(), amount: bahtSchema, payer_ids: z.array(z.string()) }))
+    .default([]),
+  remove_item_ids: z.array(z.string()).default([]),
+});
+
+export type BillEditState = { billId: string; added: AddedItem[]; removedIds: string[] };
+
+/** อ่านสิ่งที่แก้ค้างไว้จาก payload ยังไม่ได้เลือกบิล = ยังไม่มีอะไรให้แก้ */
+export function readEditState(payload: PendingPayload): BillEditState {
+  const parsed = editStateSchema.safeParse(payload);
+  if (!parsed.success) throw new AppError("PENDING_EXPIRED");
+
+  return {
+    billId: parsed.data.bill_id,
+    added: parsed.data.add_items,
+    removedIds: parsed.data.remove_item_ids,
+  };
+}
+
+export type EditedItem = NewBillItem & {
+  /** ใช้อ้างถึงตอนกดลบ: รายการเดิมใช้ id ส่วนรายการที่เพิ่งเพิ่มใช้ new<ลำดับ> */
+  ref: string;
+  added: boolean;
+};
+
+export type BillEditPlan = {
+  /** รายการหลังแก้: ของเดิมที่เหลือตามลำดับเดิม แล้วต่อด้วยของใหม่ */
+  items: EditedItem[];
+  removed: BillItemRow[];
+  shares: NewBillShare[];
+  totalSatang: number;
+  /** คนที่บอกว่าจ่ายแล้วแต่ยอดเปลี่ยน กดยืนยันแล้วจะกลับเป็นยังไม่จ่าย */
+  resetPaid: BillShareRow[];
+  /** คนที่บอกว่าจ่ายแล้วแต่ไม่เหลือรายการไหนในบิล กดยืนยันแล้วจะหลุดจากบิลไปพร้อมบันทึกนั้น */
+  droppedPaid: BillShareRow[];
+  changed: boolean;
+};
+
+/**
+ * บิลหลังแก้หน้าตาเป็นยังไง คิดด้วยสูตรเดียวกับตอนสร้างบิล (หารทีละรายการ เศษตกที่คนสร้างบิล)
+ *
+ * รายการเดิมเก็บคนร่วมจ่ายชุดเดิม รายการใหม่ที่ไม่ระบุชื่อเก็บทุกคนในบิลตอนนี้
+ * ใช้ทั้งตอนแสดงการ์ดและตอนกดยืนยัน ตัวเลขบนการ์ดกับในฐานข้อมูลจึงต่างกันไม่ได้
+ */
+export function planBillEdit(
+  bill: BillRow,
+  items: BillItemRow[],
+  shares: BillShareRow[],
+  edit: Pick<BillEditState, "added" | "removedIds">,
+): BillEditPlan {
+  // รายการที่เลือกลบไว้หายไปแล้ว แปลว่าบิลถูกแก้จากทางอื่นระหว่างนั้น ยืนยันต่อไม่ได้
+  const known = new Set(items.map((item) => item.id));
+  if (edit.removedIds.some((id) => !known.has(id))) throw new AppError("PENDING_EXPIRED");
+
+  const kept = items.filter((item) => !edit.removedIds.includes(item.id));
+  const everyone = shares.map((share) => share.user_id);
+
+  const split = splitByItem(
+    [
+      ...kept.map((item) => ({
+        item: {
+          label: item.label,
+          quantity: item.quantity,
+          unit_price_satang: item.unit_price_satang,
+          amount_satang: item.amount_satang,
+        },
+        payerIds: item.payers.map((payer) => payer.user_id),
+      })),
+      ...edit.added.map((added) => {
+        const amount = toSatang(added.amount);
+        return {
+          item: { label: added.label, quantity: 1, unit_price_satang: amount, amount_satang: amount },
+          payerIds: added.payer_ids.length > 0 ? added.payer_ids : everyone,
+        };
+      }),
+    ],
+    bill.created_by,
+  );
+
+  const after = new Map(split.shares.map((share) => [share.userId, share.amountSatang]));
+
+  return {
+    items: split.items.map((item, index) => ({
+      ...item,
+      ref: index < kept.length ? kept[index]!.id : `new${index - kept.length}`,
+      added: index >= kept.length,
+    })),
+    removed: items.filter((item) => edit.removedIds.includes(item.id)),
+    shares: split.shares,
+    totalSatang: split.totalSatang,
+    resetPaid: shares.filter(
+      (share) => share.paid && after.has(share.user_id) && after.get(share.user_id) !== share.amount_satang,
+    ),
+    droppedPaid: shares.filter((share) => share.paid && !after.has(share.user_id)),
+    changed: edit.removedIds.length > 0 || edit.added.length > 0,
+  };
+}
+
+/** แก้บิลได้เฉพาะคนสร้างบิล ถามทีเดียวว่าใบไหน ถ้ามีใบเดียวก็เลือกให้เลย */
+export async function startEditBill(
+  lineGroupId: string,
+  userId: string,
+): Promise<{ pending: PendingActionRow; bills: BillRow[] }> {
+  const bills = await listEditableBills(lineGroupId, userId);
+  if (bills.length === 0) throw new AppError("NO_BILL");
+
+  const only = bills.length === 1 ? bills[0] : undefined;
+  const pending = await createPendingAction({
+    lineGroupId,
+    requestedBy: userId,
+    actionType: "edit_bill",
+    payload: only ? { bill_id: only.id } : {},
+  });
+
+  return { pending, bills };
+}
+
+/**
+ * บันทึกสิ่งที่แก้เพิ่ม โดยใช้ pending ใบเดิมทิ้งแล้วเปิดใบใหม่ ไม่ใช่เขียนทับใบเดิม
+ *
+ * LINE แก้ข้อความที่ส่งไปแล้วไม่ได้ ทุกครั้งที่แก้จึงได้การ์ดใบใหม่ ส่วนใบเก่ายังค้างในแชท
+ * ถ้าใช้ pending ใบเดียว กดยืนยันบนการ์ดใบเก่าจะยืนยันของล่าสุดซึ่งไม่ตรงกับที่การ์ดใบนั้นแสดง
+ * แยกใบกันแล้วปุ่มบนการ์ดเก่าจะหมดอายุเอง
+ */
+export async function reviseBillEdit(pending: PendingActionRow, patch: PendingPayload): Promise<PendingActionRow> {
+  const used = await consumePendingAction(pending.id, pending.line_group_id, getSql());
+  if (!used || used.action_type !== "edit_bill") throw new AppError("PENDING_EXPIRED");
+
+  return createPendingAction({
+    lineGroupId: used.line_group_id,
+    requestedBy: used.requested_by,
+    actionType: "edit_bill",
+    payload: { ...used.payload, ...patch, awaiting: null },
+  });
+}
+
+/** เลือกบิลจากปุ่ม ต้องเป็นใบที่คนกดแก้ได้จริง ไม่ใช่เชื่อ id ที่มากับปุ่ม */
+export async function selectBillToEdit(pending: PendingActionRow, billId: string): Promise<PendingActionRow> {
+  const bills = await listEditableBills(pending.line_group_id, pending.requested_by);
+  if (!bills.some((bill) => bill.id === billId)) throw new AppError("NO_BILL");
+
+  return reviseBillEdit(pending, { bill_id: billId });
+}
+
+export type BillEditView = {
+  bill: BillRow;
+  items: BillItemRow[];
+  shares: BillShareRow[];
+  plan: BillEditPlan;
+};
+
+/** บิลที่กำลังแก้ พร้อมหน้าตาหลังแก้ เอาไว้วาดการ์ดให้ตรวจก่อนกดยืนยัน */
+export async function loadBillEdit(pending: PendingActionRow): Promise<BillEditView> {
+  const state = readEditState(pending.payload);
+  const bills = await listEditableBills(pending.line_group_id, pending.requested_by);
+  const bill = bills.find((row) => row.id === state.billId);
+  if (!bill) throw new AppError("NO_BILL");
+
+  const [items, shares] = await Promise.all([listBillItems(bill.id), listBillShares(bill.id)]);
+  return { bill, items, shares, plan: planBillEdit(bill, items, shares, state) };
+}
+
+/**
+ * ยืนยันแก้บิล ทำในทรานแซกชันเดียว: ใช้ pending action + แทนรายการ + ปรับยอดของทุกคน
+ * คิดใหม่จากข้อมูลในฐานข้อมูลตอนกดยืนยัน ไม่ใช้ตัวเลขจากตอนแสดงการ์ด
+ * ระหว่างนั้นอาจมีคนบอกว่าจ่ายแล้วเพิ่ม ซึ่งต้องนับด้วย
+ */
+export async function confirmEditBill(
+  pendingId: string,
+  lineGroupId: string,
+  userId: string,
+): Promise<BillView> {
+  const billId = await getSql().begin(async (tx) => {
+    const pending = await consumePendingAction(pendingId, lineGroupId, tx);
+    if (!pending || pending.action_type !== "edit_bill") throw new AppError("PENDING_EXPIRED");
+    if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
+
+    const state = readEditState(pending.payload);
+    const bill = await findBillById(state.billId, tx);
+    if (!bill || bill.status !== "sent" || bill.line_group_id !== lineGroupId) {
+      throw new AppError("NO_BILL");
+    }
+    if (bill.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
+
+    const plan = planBillEdit(
+      bill,
+      await listBillItems(bill.id, tx),
+      await listBillShares(bill.id, tx),
+      state,
+    );
+    if (!plan.changed) throw new AppError("NO_CHANGES");
+
+    await replaceBillItems(bill.id, plan.items, plan.totalSatang, tx);
+    await syncBillShares(bill.id, plan.shares, tx);
+    return bill.id;
+  });
+
+  const bill = await findBillById(String(billId));
+  if (!bill) throw new AppError("NO_BILL");
+
+  return {
+    bill,
+    game: bill.game_id ? await findGameById(bill.game_id) : null,
+    items: await listBillItems(bill.id),
+    shares: await listBillShares(bill.id),
+  };
 }
 
 export type PaymentResult = {

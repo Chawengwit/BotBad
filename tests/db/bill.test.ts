@@ -361,7 +361,11 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const collected: Collected[] = [];
     const context = contextFor(collected, "เชวง");
 
+    // "คิดเงิน" เฉย ๆ ถามก่อนว่าเงินเรื่องไหน ไม่เดาว่าเป็นค่ารอบ
     await handleEvent(textEvent("บอทจ๋า คิดเงิน", owner.line_user_id), context);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("คิดเงินอะไรดี?");
+
+    await handleEvent(postbackEvent(actionData(collected, "คิดค่ารอบ"), owner.line_user_id), context);
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ค่าคอร์ทเท่าไหร่");
 
     // กดปุ่มค่าคอร์ท แล้วพิมพ์จำนวนลูกกับราคาเอง
@@ -420,6 +424,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const context = contextFor(collected, "เชวง");
 
     await handleEvent(textEvent("บอทจ๋า คิดเงิน", owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "คิดค่ารอบ"), owner.line_user_id), context);
     await handleEvent(postbackEvent(actionData(collected, "ไม่มีค่าคอร์ท"), owner.line_user_id), context);
     await handleEvent(postbackEvent(actionData(collected, "1 ลูก"), owner.line_user_id), context);
     await handleEvent(postbackEvent(actionData(collected, "25"), owner.line_user_id), context);
@@ -437,6 +442,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     const context = contextFor(collected, "เชวง");
 
     await handleEvent(textEvent("บอทจ๋า คิดเงิน", owner.line_user_id), context);
+    await handleEvent(postbackEvent(actionData(collected, "คิดค่ารอบ"), owner.line_user_id), context);
     await handleEvent(textEvent("เท่าไหร่ก็ได้", owner.line_user_id), context);
 
     expect(messageTexts(collected.at(-1)!.messages)).toContain("พิมพ์เป็นตัวเลข");

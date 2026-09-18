@@ -71,6 +71,7 @@ describe.skipIf(!canRunDbTests())("แขกและการลงชื่อ
 
   afterEach(async () => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     await cleanup();
   });
 
@@ -258,6 +259,7 @@ describe.skipIf(!canRunDbTests())("แขกและการลงชื่อ
     expect(await names(game.id)).toEqual(["ฮก", "กิ้ฟ", "วิท"]);
 
     await handleEvent(textEvent("บอทจ๋า คิดเงิน", hok.lineUserId), context);
+    await pressButton(collected, "คิดค่ารอบ", hok.lineUserId, context);
     await handleEvent(textEvent("300", hok.lineUserId), context);
     await pressButton(collected, "ไม่มี", hok.lineUserId, context);
     await pressButton(collected, "ไม่มีแล้ว", hok.lineUserId, context);
@@ -306,12 +308,18 @@ describe.skipIf(!canRunDbTests())("แขกและการลงชื่อ
     const collected: Collected[] = [];
     const context = contextFor(collected, "ฮก");
 
+    // ไม่มี Gemini: ตั้งชื่อบิลมากับคำสั่ง แล้วตอบทีละขั้นแบบเดิม (มี Gemini จะให้พิมพ์รายการมาอิสระ)
+    vi.stubEnv("GEMINI_API_KEY", "");
+
     await handleEvent(textEvent("บอทจ๋า คิดเงิน ค่ากินข้าว", hok.lineUserId), context);
     await pressButton(collected, "ไม่มีค่าคอร์ท", hok.lineUserId, context);
     await pressButton(collected, "ไม่มี", hok.lineUserId, context);
     await pressButton(collected, "อื่น ๆ", hok.lineUserId, context);
     await handleEvent(textEvent("ค่าข้าว 300 ฮก กิ้ฟ", hok.lineUserId), context);
     await pressButton(collected, "ไม่มีแล้ว", hok.lineUserId, context);
+    // บิลลอย ๆ ไม่มีรอบให้ดึงเลขพร้อมเพย์ ถามคนสร้างบิลก่อนขึ้นการ์ดยืนยัน (PRP §5.2.1)
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("เลขพร้อมเพย์");
+    await pressButton(collected, "ข้าม", hok.lineUserId, context);
     await pressButton(collected, "ส่งบิล", hok.lineUserId, context);
 
     const bills = await sql<{ game_id: string | null; title: string }[]>`

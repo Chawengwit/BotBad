@@ -19,7 +19,7 @@ import {
   confirmCreateGame,
   confirmEditGame,
 } from "@/line/messages";
-import { findLastShuttlePrice } from "@/repositories/bill.repository";
+import { findLastPromptPayOf, findLastShuttlePrice } from "@/repositories/bill.repository";
 import {
   attachPayers,
   buildBillItems,
@@ -156,8 +156,16 @@ async function createQuestion(
 }
 
 /**
+ * บิลลอย ๆ ไม่มีรอบให้ดึงเลขพร้อมเพย์ ต้องถามคนสร้างบิลก่อนขึ้นการ์ดยืนยัน (PRP §5.2.1)
+ * บิลของรอบใช้เลขของรอบเหมือนเดิม ไม่ถามซ้ำ
+ */
+export function needsBillPromptPay(pending: PendingActionRow, payload: PendingPayload): boolean {
+  return pending.game_id === null && payload.promptpay === undefined && payload.promptpay_asked !== true;
+}
+
+/**
  * เดินหน้า wizard คิดเงิน
- * ลำดับคำถาม: ค่าคอร์ท → กี่ลูก → ลูกละเท่าไหร่ → ค่าอื่น ๆ → การ์ดยืนยัน
+ * ลำดับคำถาม: ค่าคอร์ท → กี่ลูก → ลูกละเท่าไหร่ → ค่าอื่น ๆ → (บิลลอย ๆ: พร้อมเพย์) → การ์ดยืนยัน
  * ช่องที่ข้ามไปเก็บเป็น null เพื่อแยกจาก "ยังไม่ได้ถาม" (undefined)
  */
 export async function advanceBillWizard(
@@ -185,6 +193,12 @@ export async function advanceBillWizard(
   if (payload.extras_done !== true) {
     await save(pending.id, { ...patch, awaiting: null });
     return [askExtraItem(pending.id)];
+  }
+
+  // เสนอเลขที่คนสร้างบิลเคยใช้เอง ไม่ใช่เลขล่าสุดของกลุ่ม ไม่งั้นเงินไปเข้าบัญชีคนอื่น
+  if (needsBillPromptPay(pending, payload)) {
+    await save(pending.id, { ...patch, awaiting: "bill_promptpay" });
+    return [askPromptPay(pending.id, await findLastPromptPayOf(pending.requested_by))];
   }
 
   await save(pending.id, { ...patch, awaiting: null });
@@ -224,6 +238,8 @@ async function previewBill(
   );
 
   const split = splitByItem(withPayers, pending.requested_by);
+  // ใช้กติกาเดียวกับตอนสร้างจริง: เลขที่ตอบมาก่อน ไม่มีก็ใช้เลขของรอบ
+  const promptpay = (payload.promptpay as string | null | undefined) ?? game?.promptpay ?? null;
 
   return confirmBill(
     pending.id,
@@ -253,6 +269,7 @@ async function previewBill(
       paid_by: null,
       paid_by_name: null,
     })),
+    promptpay,
   );
 }
 

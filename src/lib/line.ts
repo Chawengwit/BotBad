@@ -58,6 +58,8 @@ export type FlexText = {
   wrap?: boolean;
   flex?: number;
   margin?: string;
+  /** ขีดฆ่ารายการที่กำลังจะลบ ให้เห็นว่าหายไปอะไรก่อนกดยืนยัน */
+  decoration?: "none" | "underline" | "line-through";
   action?: MessageAction;
 };
 

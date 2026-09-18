@@ -11,10 +11,11 @@ import { startCancelGame, startCloseGame, startEditGame } from "@/services/game-
 import { startCreateGame } from "@/services/game.service";
 import { unpaidSharesForGame } from "@/services/bill.service";
 import {
+  doBillMenu,
   doCancelBill,
   doMarkPayment,
   doShowBill,
-  doStartBill,
+  doStartNewBill,
   doUnpaidList,
 } from "./bill-actions";
 import { doJoin, doJoinFor, doLeave, doLeaveFor, doList } from "./game-actions";
@@ -60,6 +61,13 @@ const COMMANDS_WITH_ARGS: readonly RuleCommand[] = [
   "ยกเลิกบิล",
 ];
 
+/**
+ * คำสั่งที่ส่วนเติมท้ายเป็นชื่อบิล ชื่อบิลอยู่บรรทัดเดียวเสมอ
+ * พิมพ์มาหลายบรรทัดคือกำลังบอกรายการในบิล เช่น "บิล ร้านโชคดี" ตามด้วยค่าข้าวค่าน้ำ
+ * ถ้าจับเป็นคำสั่ง "บิล" จะกลายเป็นขอดูบิลชื่อยาวทั้งก้อน แล้วตอบว่าหาบิลไม่เจอ
+ */
+const BILL_TITLE_COMMANDS: readonly RuleCommand[] = ["คิดเงิน", "บิล", "ใครยังไม่จ่าย", "ยกเลิกบิล"];
+
 export type ParsedCommand = { command: RuleCommand; args: string };
 
 /** เช็กก่อนแตะฐานข้อมูลหรือเรียก LINE API จะได้ไม่เปลืองกับข้อความที่ยังไม่รองรับ */
@@ -81,6 +89,7 @@ export function parseCommand(text: string): ParsedCommand | null {
     const args = trimmed.slice(command.length).trim();
     // ต้องมีตัวคั่นจริง ๆ ไม่ใช่คำอื่นที่บังเอิญขึ้นต้นเหมือนกัน
     if (args.length > 0 && trimmed[command.length] !== undefined && /^[\s,]/u.test(trimmed[command.length]!)) {
+      if (BILL_TITLE_COMMANDS.includes(command) && trimmed.includes("\n")) return null;
       return { command, args };
     }
   }
@@ -135,7 +144,10 @@ export async function handleRuleCommand(input: {
       return [confirmCloseGame(pending.id, game, joinedCount, await unpaidSharesForGame(game.id))];
     }
     case "คิดเงิน":
-      return doStartBill(input.lineGroupId, input.user, args);
+      // ไม่บอกชื่อบิล = ยังไม่รู้ว่าเงินเรื่องไหน ถามก่อนแทนการเดาว่าเป็นค่ารอบ
+      return args
+        ? doStartNewBill(input.lineGroupId, input.user, args)
+        : doBillMenu(input.lineGroupId, input.user);
     case "บิล":
       return doShowBill(input.lineGroupId, args);
     case "ใครยังไม่จ่าย":
