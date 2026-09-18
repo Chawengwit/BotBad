@@ -1,22 +1,19 @@
 import type { ErrorCode } from "@/errors/app-errors";
-import type {
-  ButtonsMessage,
-  FlexComponent,
-  FlexMessage,
-  LineMessage,
-  MessageAction,
-  TextMessage,
-} from "@/lib/line";
+import type { FlexComponent, FlexMessage, LineMessage, TextMessage } from "@/lib/line";
 import {
   amountRow,
   bubble,
+  type Button,
   COLOR,
   flexMessage,
   footerButtons,
   header,
-  hbox,
+  heading,
+  type Headline,
+  type IconName,
   infoRow,
   note,
+  questionCard,
   separator,
   title,
   vbox,
@@ -41,73 +38,48 @@ function wizardData(pendingId: string, step: string, value: string): string {
   return new URLSearchParams({ action: "wizard", pending_id: pendingId, step, value }).toString();
 }
 
-function buttons(altText: string, body: string, actions: ButtonsMessage["template"]["actions"]): ButtonsMessage {
-  return { type: "template", altText, template: { type: "buttons", text: body, actions } };
+/** ปุ่มตัวเลือกของ wizard ตัวเลือกที่เป็นตัวเลขล้วนไม่ต้องมีไอคอน */
+function choice(label: string, data: string, iconName?: IconName): Button {
+  return { label, ...(iconName ? { icon: iconName } : {}), action: { type: "postback", label, data } };
 }
 
-export function askCourtCount(pendingId: string): ButtonsMessage {
-  return buttons(
-    "กี่คอร์ท?",
-    "🏸 เปิดรอบตีแบด\n\nกี่คอร์ท?",
-    [1, 2, 3, 4].map((count) => ({
-      type: "postback" as const,
-      label: `${count} คอร์ท`,
-      displayText: `${count} คอร์ท`,
-      data: wizardData(pendingId, "court", String(count)),
-    })),
+/** ปุ่มเปิดปฏิทิน ค่าที่เลือกส่งกลับมาใน params ของ postback ไม่ได้อยู่ใน data */
+function picker(
+  label: string,
+  iconName: IconName,
+  data: string,
+  options: { mode: "date" | "time" | "datetime"; initial: string; min?: string },
+): Button {
+  return { label, icon: iconName, action: { type: "datetimepicker", label, data, ...options } };
+}
+
+export function askCourtCount(pendingId: string): FlexMessage {
+  return questionCard(
+    { icon: "table-tennis-paddle-ball", text: "เปิดรอบตีแบด กี่คอร์ท?" },
+    [],
+    [1, 2, 3, 4].map((count) => choice(`${count} คอร์ท`, wizardData(pendingId, "court", String(count)))),
   );
 }
 
-export function askDate(pendingId: string, today: string = todayInBangkok()): ButtonsMessage {
-  return buttons("วันไหน?", "📅 วันไหน?", [
-    {
-      type: "postback",
-      label: "วันนี้",
-      displayText: "วันนี้",
-      data: wizardData(pendingId, "date", "today"),
-    },
-    {
-      type: "postback",
-      label: "พรุ่งนี้",
-      displayText: "พรุ่งนี้",
-      data: wizardData(pendingId, "date", "tomorrow"),
-    },
-    {
-      type: "datetimepicker",
-      label: "เลือกวัน",
+export function askDate(pendingId: string, today: string = todayInBangkok()): FlexMessage {
+  return questionCard({ icon: "calendar-days", text: "วันไหน?" }, [], [
+    choice("วันนี้", wizardData(pendingId, "date", "today")),
+    choice("พรุ่งนี้", wizardData(pendingId, "date", "tomorrow")),
+    picker("เลือกวัน", "calendar-days", wizardData(pendingId, "date", "picker"), {
       mode: "date",
       initial: today,
       min: today,
-      data: new URLSearchParams({
-        action: "wizard",
-        pending_id: pendingId,
-        step: "date",
-        value: "picker",
-      }).toString(),
-    },
+    }),
   ]);
 }
 
-export function askTime(pendingId: string): ButtonsMessage {
-  return buttons("กี่โมง?", "⏰ กี่โมง?", [
-    ...WIZARD_TIME_CHOICES.map((time) => ({
-      type: "postback" as const,
-      label: time,
-      displayText: time,
-      data: wizardData(pendingId, "time", time),
-    })),
-    {
-      type: "datetimepicker",
-      label: "กำหนดเวลาเอง",
+export function askTime(pendingId: string): FlexMessage {
+  return questionCard({ icon: "clock", text: "กี่โมง?" }, [], [
+    ...WIZARD_TIME_CHOICES.map((time) => choice(time, wizardData(pendingId, "time", time))),
+    picker("กำหนดเวลาเอง", "clock", wizardData(pendingId, "time", "picker"), {
       mode: "time",
       initial: "19:00",
-      data: new URLSearchParams({
-        action: "wizard",
-        pending_id: pendingId,
-        step: "time",
-        value: "picker",
-      }).toString(),
-    },
+    }),
   ]);
 }
 
@@ -125,62 +97,29 @@ export function askWhen(
   pendingId: string,
   usualTime: string = DEFAULT_START_TIME,
   today: string = todayInBangkok(),
-): ButtonsMessage {
-  const shortcut = (label: string, date: string) => ({
-    type: "postback" as const,
-    label: `${label} ${usualTime}`,
-    displayText: `${label} ${usualTime}`,
-    data: wizardData(pendingId, "when", `${date} ${usualTime}`),
-  });
+): FlexMessage {
+  const shortcut = (label: string, date: string) =>
+    choice(`${label} ${usualTime}`, wizardData(pendingId, "when", `${date} ${usualTime}`));
 
-  return buttons("เมื่อไหร่?", "📅 ตีเมื่อไหร่?", [
+  return questionCard({ icon: "calendar-days", text: "ตีเมื่อไหร่?" }, [], [
     shortcut("วันนี้", today),
     shortcut("พรุ่งนี้", addDays(today, 1)),
-    {
-      type: "datetimepicker",
-      label: "เลือกวันและเวลา",
+    picker("เลือกวันและเวลา", "calendar-days", wizardData(pendingId, "when", "picker"), {
       mode: "datetime",
       initial: `${today}T${usualTime}`,
       min: `${today}T00:00`,
-      data: new URLSearchParams({
-        action: "wizard",
-        pending_id: pendingId,
-        step: "when",
-        value: "picker",
-      }).toString(),
-    },
+    }),
   ]);
 }
 
-export function askDuration(pendingId: string): ButtonsMessage {
-  return buttons(
-    "เล่นกี่ชั่วโมง?",
-    "⏱️ เล่นกี่ชั่วโมง?",
-    WIZARD_DURATION_CHOICES.map((minutes) => ({
-      type: "postback" as const,
-      label: `${minutes / 60} ชั่วโมง`,
-      displayText: `${minutes / 60} ชั่วโมง`,
-      data: wizardData(pendingId, "duration", String(minutes)),
-    })),
+export function askDuration(pendingId: string): FlexMessage {
+  return questionCard(
+    { icon: "hourglass-half", text: "เล่นกี่ชั่วโมง?" },
+    [],
+    WIZARD_DURATION_CHOICES.map((minutes) =>
+      choice(`${minutes / 60} ชั่วโมง`, wizardData(pendingId, "duration", String(minutes))),
+    ),
   );
-}
-
-function quickReplyText(body: string, items: { label: string; data: string }[]): TextMessage {
-  return {
-    type: "text",
-    text: body,
-    quickReply: {
-      items: items.map((item) => ({
-        type: "action",
-        action: {
-          type: "postback",
-          label: item.label,
-          displayText: item.label,
-          data: item.data,
-        },
-      })),
-    },
-  };
 }
 
 /** ค่าปกติคือ คอร์ท x 8 แล้วให้เลือกบวกลบได้ทีละ 2 (spec §7) */
@@ -191,15 +130,15 @@ export function playerCountChoices(courtCount: number): number[] {
   );
 }
 
-export function askMaxPlayers(pendingId: string, courtCount: number): TextMessage {
+export function askMaxPlayers(pendingId: string, courtCount: number): FlexMessage {
   const base = courtCount * 8;
 
-  return quickReplyText(
-    `👥 รับกี่คน?\n\nค่าปกติของ ${courtCount} คอร์ทคือ ${base} คน`,
-    playerCountChoices(courtCount).map((count) => ({
-      label: count === base ? `${count} คน (ปกติ)` : `${count} คน`,
-      data: wizardData(pendingId, "max", String(count)),
-    })),
+  return questionCard(
+    { icon: "users", text: "รับกี่คน?" },
+    [note(`ค่าปกติของ ${courtCount} คอร์ทคือ ${base} คน`)],
+    playerCountChoices(courtCount).map((count) =>
+      choice(count === base ? `${count} คน (ปกติ)` : `${count} คน`, wizardData(pendingId, "max", String(count))),
+    ),
   );
 }
 
@@ -216,35 +155,31 @@ export function askSameVenue(
   courtName: string,
   hasMap: boolean,
   promptpay: string | null,
-): ButtonsMessage {
-  const body = [
-    "🏟️ ที่เดิมไหม?",
-    "",
-    courtName,
-    ...(hasMap ? ["📍 มีลิงก์แผนที่"] : []),
-    ...(promptpay ? [`💸 พร้อมเพย์ ${formatPromptPay(promptpay)}`] : []),
-  ].join("\n");
-
-  return buttons("ที่เดิมไหม?", body, [
-    {
-      type: "postback",
-      label: "ที่เดิม",
-      displayText: "ที่เดิม",
-      data: wizardData(pendingId, "venue", "same"),
-    },
-    {
-      type: "postback",
-      label: "เปลี่ยนที่",
-      displayText: "เปลี่ยนที่",
-      data: wizardData(pendingId, "venue", "change"),
-    },
-  ]);
+): FlexMessage {
+  return questionCard(
+    { icon: "building", text: "ที่เดิมไหม?" },
+    [
+      vbox(
+        [
+          { type: "text", text: courtName, size: "md", weight: "bold", color: COLOR.ink, wrap: true },
+          ...(hasMap ? [infoRow("location-dot", "มีลิงก์แผนที่")] : []),
+          ...(promptpay ? [infoRow("money-bill-wave", `พร้อมเพย์ ${formatPromptPay(promptpay)}`)] : []),
+        ],
+        { spacing: "sm" },
+      ),
+    ],
+    [
+      choice("ที่เดิม", wizardData(pendingId, "venue", "same"), "rotate-left"),
+      choice("เปลี่ยนที่", wizardData(pendingId, "venue", "change"), "pen"),
+    ],
+  );
 }
 
-export function askLocation(pendingId: string): TextMessage {
-  return quickReplyText(
-    "📍 มีลิงก์แผนที่ไหม?\n\nวางลิงก์ Google Maps หรือกดแชร์ตำแหน่งมาก็ได้ ถ้าไม่มีก็กดข้ามได้เลย",
-    [{ label: "ข้าม", data: wizardData(pendingId, "location", "skip") }],
+export function askLocation(pendingId: string): FlexMessage {
+  return questionCard(
+    { icon: "location-dot", text: "มีลิงก์แผนที่ไหม?" },
+    [note("วางลิงก์ Google Maps หรือกดแชร์ตำแหน่งมาก็ได้ ถ้าไม่มีก็กดข้ามได้เลย")],
+    [choice("ข้าม", wizardData(pendingId, "location", "skip"), "forward")],
   );
 }
 
@@ -257,83 +192,90 @@ export function formatPromptPay(digits: string): string {
   return digits;
 }
 
-export function askPromptPay(pendingId: string, lastUsed: string | null): TextMessage {
-  return quickReplyText(
-    "💸 เลขพร้อมเพย์สำหรับตอนคิดเงิน?\n\nพิมพ์เบอร์มือถือหรือเลขบัตรประชาชนของคนรับโอน ถ้ายังไม่ใส่ก็กดข้ามได้",
+export function askPromptPay(pendingId: string, lastUsed: string | null): FlexMessage {
+  return questionCard(
+    { icon: "money-bill-wave", text: "เลขพร้อมเพย์สำหรับตอนคิดเงิน?" },
+    [note("พิมพ์เบอร์มือถือหรือเลขบัตรประชาชนของคนรับโอน ถ้ายังไม่ใส่ก็กดข้ามได้")],
     [
       ...(lastUsed
-        ? [
-            {
-              label: `ใช้ ${formatPromptPay(lastUsed)}`,
-              data: wizardData(pendingId, "promptpay", "reuse"),
-            },
-          ]
+        ? [choice(`ใช้ ${formatPromptPay(lastUsed)}`, wizardData(pendingId, "promptpay", "reuse"), "rotate-left")]
         : []),
-      { label: "ข้าม", data: wizardData(pendingId, "promptpay", "skip") },
+      choice("ข้าม", wizardData(pendingId, "promptpay", "skip"), "forward"),
     ],
   );
 }
 
-/** ใช้เมื่อ Gemini ล่ม โควตาหมด หรือยังไม่ได้ตั้งค่า (LLM Design §9) */
-/** ปุ่มลัดใต้ข้อความ ส่งเป็นข้อความที่มี wake word ครบ จะได้เข้าทางเดิมทุกครั้ง */
-function commandShortcuts(commands: string[]): TextMessage["quickReply"] {
-  return {
-    items: commands.map((command) => ({
-      type: "action" as const,
-      action: {
-        type: "message" as const,
-        label: command,
-        text: `${WAKE_WORD} ${command}`,
-      },
-    })),
-  };
+const COMMAND_ICONS = {
+  เปิดตี: "plus",
+  ลงชื่อ: "user-plus",
+  ถอนชื่อ: "user-minus",
+  ใครตีบ้าง: "list",
+  คิดเงิน: "calculator",
+} as const satisfies Record<string, IconName>;
+
+/** ปุ่มลัดส่งเป็นข้อความที่มี wake word ครบ จะได้เข้าทางเดิมทุกครั้ง */
+function commandButtons(commands: (keyof typeof COMMAND_ICONS)[]): Button[] {
+  return commands.map((command) => ({
+    label: command,
+    icon: COMMAND_ICONS[command],
+    action: { type: "message", label: command, text: `${WAKE_WORD} ${command}` },
+  }));
 }
 
-export function fallbackMenu(): TextMessage {
-  return {
-    type: "text",
-    text: "🤔 ผมยังไม่เข้าใจประโยคนี้ครับพี่\n\nลองเลือกจากด้านล่างได้เลย",
-    quickReply: commandShortcuts(["เปิดตี", "ลงชื่อ", "ถอนชื่อ", "ใครตีบ้าง"]),
-  };
+/** ใช้เมื่อ Gemini ล่ม โควตาหมด หรือยังไม่ได้ตั้งค่า (LLM Design §9) */
+export function fallbackMenu(): FlexMessage {
+  return questionCard(
+    { icon: "comment-dots", text: "ผมยังไม่เข้าใจประโยคนี้ครับพี่" },
+    [note("ลองเลือกจากด้านล่างได้เลย")],
+    commandButtons(["เปิดตี", "ลงชื่อ", "ถอนชื่อ", "ใครตีบ้าง"]),
+  );
 }
 
 /**
  * ตอบตอนมีคนเรียกชื่อบอทเฉย ๆ ยังไม่ได้สั่งอะไร
  * หลังจากนี้บอทเปิดโหมดฟัง สั่งต่อได้เลยโดยไม่ต้องเรียกชื่ออีก (spec §6)
  */
-export function greeting(): TextMessage {
-  return {
-    type: "text",
-    text: "ว่าไงครับพี่ 🏸",
-    quickReply: commandShortcuts(["เปิดตี", "ลงชื่อ", "ใครตีบ้าง", "คิดเงิน"]),
-  };
+export function greeting(): FlexMessage {
+  return questionCard(
+    { icon: "table-tennis-paddle-ball", text: "ว่าไงครับพี่" },
+    [],
+    commandButtons(["เปิดตี", "ลงชื่อ", "ใครตีบ้าง", "คิดเงิน"]),
+  );
+}
+
+function helpSection(name: string, lines: string[]): FlexComponent {
+  return vbox(
+    [
+      { type: "text", text: name, size: "sm", weight: "bold", color: COLOR.ink },
+      ...lines.map((line) => ({ type: "text" as const, text: `• ${line}`, size: "sm", color: COLOR.ink, wrap: true })),
+    ],
+    { spacing: "xs" },
+  );
 }
 
 /**
  * เมนูช่วยเหลือ — เป็นหนึ่งในกรณีที่แนบปุ่มได้ เพราะบอทรอคำสั่งอยู่ (spec §23)
  * สำคัญขึ้นมากตั้งแต่เลิกแนบปุ่มท้ายผลลัพธ์ เพราะนี่คือทางเดียวที่คนใหม่ในกลุ่มจะรู้ว่าสั่งอะไรได้
  */
-export function helpMenu(): TextMessage {
-  return {
-    type: "text",
-    text: [
-      "🏸 บอทจ๋าช่วยอะไรได้บ้าง",
-      "",
-      "รอบตี",
-      "• เปิดตี — เปิดรอบใหม่",
-      "• ลงชื่อ / ถอนชื่อ",
-      "• ใครตีบ้าง — ดูรายชื่อ",
-      "• แก้ไข / ยกเลิก / ปิดรอบ (เฉพาะคนเปิดรอบ)",
-      "",
-      "ค่าใช้จ่าย",
-      "• คิดเงิน — หารค่าคอร์ทและลูกแบด (เฉพาะคนเปิดรอบ)",
-      "• บิล / ใครยังไม่จ่าย",
-      "• จ่ายแล้ว / ยังไม่จ่าย",
-      "",
-      `พิมพ์ "${WAKE_WORD}" นำหน้า หรือเรียก "${WAKE_WORD}" เฉย ๆ ครั้งเดียวแล้วสั่งต่อได้เลย`,
-    ].join("\n"),
-    quickReply: commandShortcuts(["เปิดตี", "ลงชื่อ", "ใครตีบ้าง", "คิดเงิน"]),
-  };
+export function helpMenu(): FlexMessage {
+  return questionCard(
+    { icon: "table-tennis-paddle-ball", text: "บอทจ๋าช่วยอะไรได้บ้าง" },
+    [
+      helpSection("รอบตี", [
+        "เปิดตี — เปิดรอบใหม่",
+        "ลงชื่อ / ถอนชื่อ",
+        "ใครตีบ้าง — ดูรายชื่อ",
+        "แก้ไข / ยกเลิก / ปิดรอบ (เฉพาะคนเปิดรอบ)",
+      ]),
+      helpSection("ค่าใช้จ่าย", [
+        "คิดเงิน — หารค่าคอร์ทและลูกแบด (เฉพาะคนเปิดรอบ)",
+        "บิล / ใครยังไม่จ่าย",
+        "จ่ายแล้ว / ยังไม่จ่าย",
+      ]),
+      note(`พิมพ์ "${WAKE_WORD}" นำหน้า หรือเรียก "${WAKE_WORD}" เฉย ๆ ครั้งเดียวแล้วสั่งต่อได้เลย`),
+    ],
+    commandButtons(["เปิดตี", "ลงชื่อ", "ใครตีบ้าง", "คิดเงิน"]),
+  );
 }
 
 /** ผู้ใช้บอกเองว่าจบแล้ว ปิดโหมดฟังทันทีไม่ต้องรอหมดเวลา */
@@ -345,23 +287,26 @@ export function askAgain(message: string): TextMessage {
   return text(message);
 }
 
-function confirmActions(
-  pendingId: string,
-  confirmLabel: string,
-  rejectLabel = "ยกเลิก",
-): MessageAction[] {
+function confirmActions(pendingId: string, confirmLabel: string, rejectLabel = "ยกเลิก"): Button[] {
   return [
     {
-      type: "postback",
       label: confirmLabel,
-      displayText: confirmLabel,
-      data: new URLSearchParams({ action: "confirm", pending_id: pendingId }).toString(),
+      icon: "check",
+      primary: true,
+      action: {
+        type: "postback",
+        label: confirmLabel,
+        data: new URLSearchParams({ action: "confirm", pending_id: pendingId }).toString(),
+      },
     },
     {
-      type: "postback",
       label: rejectLabel,
-      displayText: rejectLabel,
-      data: new URLSearchParams({ action: "reject", pending_id: pendingId }).toString(),
+      icon: rejectLabel === "กลับ" ? "arrow-left" : "xmark",
+      action: {
+        type: "postback",
+        label: rejectLabel,
+        data: new URLSearchParams({ action: "reject", pending_id: pendingId }).toString(),
+      },
     },
   ];
 }
@@ -370,19 +315,19 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): FlexMess
   return flexMessage(
     "ยืนยันเปิดรอบตี?",
     bubble({
-      header: header("🏸 ยืนยันเปิดรอบตี?"),
+      header: header({ icon: "table-tennis-paddle-ball", text: "ยืนยันเปิดรอบตี?" }),
       body: vbox(
         [
           title(draft.court_name),
           vbox(
             [
-              infoRow("📅", formatThaiDate(draft.play_date)),
-              infoRow("⏰", formatTimeRange(draft.start_time, draft.duration_minutes)),
-              infoRow("🏸", `${draft.court_count} คอร์ท`),
-              infoRow("👥", `รับ ${draft.max_players} คน`),
-              ...(draft.location_url ? [infoRow("📍", "มีลิงก์แผนที่")] : []),
+              infoRow("calendar-days", formatThaiDate(draft.play_date)),
+              infoRow("clock", formatTimeRange(draft.start_time, draft.duration_minutes)),
+              infoRow("table-tennis-paddle-ball", `${draft.court_count} คอร์ท`),
+              infoRow("users", `รับ ${draft.max_players} คน`),
+              ...(draft.location_url ? [infoRow("location-dot", "มีลิงก์แผนที่")] : []),
               ...(draft.promptpay
-                ? [infoRow("💸", `พร้อมเพย์ ${formatPromptPay(draft.promptpay)}`)]
+                ? [infoRow("money-bill-wave", `พร้อมเพย์ ${formatPromptPay(draft.promptpay)}`)]
                 : []),
             ],
             { spacing: "sm", margin: "lg" },
@@ -398,13 +343,13 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): FlexMess
 /** บรรทัดข้อมูลรอบตีที่ใช้ทั้งการ์ดรอบและการ์ดรายชื่อ */
 function gameRows(game: GameRow, playerLine: string): FlexComponent[] {
   return [
-    infoRow("📅", formatThaiDate(game.play_date)),
-    infoRow("⏰", formatTimeRange(game.start_time, game.duration_minutes)),
-    infoRow("🏸", `${game.court_count} คอร์ท`),
-    infoRow("👥", playerLine),
+    infoRow("calendar-days", formatThaiDate(game.play_date)),
+    infoRow("clock", formatTimeRange(game.start_time, game.duration_minutes)),
+    infoRow("table-tennis-paddle-ball", `${game.court_count} คอร์ท`),
+    infoRow("users", playerLine),
     // ใน Flex ข้อความไม่กลายเป็นลิงก์ให้เอง ต้องผูก action เข้ากับบรรทัดนั้นเอง
     ...(game.location_url
-      ? [infoRow("📍", "เปิดแผนที่", { type: "uri" as const, label: "แผนที่", uri: game.location_url })]
+      ? [infoRow("location-dot", "เปิดแผนที่", { type: "uri" as const, label: "แผนที่", uri: game.location_url })]
       : []),
   ];
 }
@@ -413,11 +358,11 @@ function gameRows(game: GameRow, playerLine: string): FlexComponent[] {
  * การ์ดรอบตี — Flex ไม่มีปุ่ม (spec §23)
  * LINE แก้ข้อความที่ส่งไปแล้วไม่ได้ ทุกครั้งที่มีความเคลื่อนไหวจึงส่งการ์ดใบใหม่
  */
-export function gameCard(game: GameRow, joinedCount: number, headline?: string): FlexMessage {
+export function gameCard(game: GameRow, joinedCount: number, headline?: Headline): FlexMessage {
   const courtName = game.court_name ?? "BADMINTON";
 
   return flexMessage(
-    `${headline ?? courtName} ${formatThaiDate(game.play_date)}`,
+    `${headline?.text ?? courtName} ${formatThaiDate(game.play_date)}`,
     bubble({
       ...(headline ? { header: header(headline) } : {}),
       body: vbox(
@@ -540,54 +485,53 @@ export function playerList(game: GameRow, players: { display_name: string }[]): 
   );
 }
 
-export function editMenu(pendingId: string): TextMessage {
-  return quickReplyText(
-    "✏️ ต้องการแก้ไขอะไร?",
-    [
-      { label: "จำนวนคอร์ท", value: "court" },
-      { label: "จำนวนคน", value: "max" },
-      { label: "วันที่", value: "date" },
-      { label: "เวลา", value: "time" },
-      { label: "ระยะเวลา", value: "duration" },
-      { label: "ชื่อคอร์ท", value: "name" },
-      { label: "แผนที่", value: "location" },
-      { label: "พร้อมเพย์", value: "promptpay" },
-    ].map((choice) => ({
-      label: choice.label,
-      data: wizardData(pendingId, "field", choice.value),
-    })),
+export function editMenu(pendingId: string): FlexMessage {
+  const fields: [string, string, IconName][] = [
+    ["จำนวนคอร์ท", "court", "table-tennis-paddle-ball"],
+    ["จำนวนคน", "max", "users"],
+    ["วันที่", "date", "calendar-days"],
+    ["เวลา", "time", "clock"],
+    ["ระยะเวลา", "duration", "hourglass-half"],
+    ["ชื่อคอร์ท", "name", "building"],
+    ["แผนที่", "location", "location-dot"],
+    ["พร้อมเพย์", "promptpay", "money-bill-wave"],
+  ];
+
+  return questionCard(
+    { icon: "pen", text: "ต้องการแก้ไขอะไร?" },
+    [],
+    fields.map(([label, value, iconName]) => choice(label, wizardData(pendingId, "field", value), iconName)),
   );
 }
 
-function changeLines(game: GameRow, patch: EditPatch): string[] {
-  const lines: string[] = [];
+function changeLines(game: GameRow, patch: EditPatch): Headline[] {
+  const lines: Headline[] = [];
+  const add = (iconName: IconName, text: string) => lines.push({ icon: iconName, text });
 
   if (patch.court_count !== undefined) {
-    lines.push(`🏸 ${game.court_count} → ${patch.court_count} คอร์ท`);
+    add("table-tennis-paddle-ball", `${game.court_count} → ${patch.court_count} คอร์ท`);
   }
   if (patch.max_players !== undefined) {
-    lines.push(`👥 รับ ${game.max_players} → ${patch.max_players} คน`);
+    add("users", `รับ ${game.max_players} → ${patch.max_players} คน`);
   }
   if (patch.court_name !== undefined) {
-    lines.push(`🏟️ ${game.court_name ?? "(ยังไม่ระบุ)"} → ${patch.court_name}`);
+    add("building", `${game.court_name ?? "(ยังไม่ระบุ)"} → ${patch.court_name}`);
   }
   if (patch.location_url !== undefined) {
-    lines.push("📍 อัปเดตลิงก์แผนที่");
+    add("location-dot", "อัปเดตลิงก์แผนที่");
   }
   if (patch.promptpay !== undefined) {
     const before = game.promptpay ? formatPromptPay(game.promptpay) : "(ยังไม่ระบุ)";
-    lines.push(`💸 พร้อมเพย์ ${before} → ${formatPromptPay(patch.promptpay)}`);
+    add("money-bill-wave", `พร้อมเพย์ ${before} → ${formatPromptPay(patch.promptpay)}`);
   }
   if (patch.play_date !== undefined) {
-    lines.push(`📅 ${formatThaiDate(game.play_date)} → ${formatThaiDate(patch.play_date)}`);
+    add("calendar-days", `${formatThaiDate(game.play_date)} → ${formatThaiDate(patch.play_date)}`);
   }
   if (patch.start_time !== undefined) {
-    lines.push(`⏰ ${game.start_time} → ${patch.start_time}`);
+    add("clock", `${game.start_time} → ${patch.start_time}`);
   }
   if (patch.duration_minutes !== undefined) {
-    lines.push(
-      `⏱️ ${formatDuration(game.duration_minutes)} → ${formatDuration(patch.duration_minutes)}`,
-    );
+    add("hourglass-half", `${formatDuration(game.duration_minutes)} → ${formatDuration(patch.duration_minutes)}`);
   }
 
   return lines;
@@ -597,17 +541,11 @@ export function confirmEditGame(pendingId: string, game: GameRow, patch: EditPat
   return flexMessage(
     "ยืนยันการแก้ไข?",
     bubble({
-      header: header("✏️ ยืนยันการแก้ไข?"),
+      header: header({ icon: "pen", text: "ยืนยันการแก้ไข?" }),
       body: vbox(
         [
           vbox(
-            changeLines(game, patch).map((line) => ({
-              type: "text" as const,
-              text: line,
-              size: "sm",
-              color: COLOR.ink,
-              wrap: true,
-            })),
+            changeLines(game, patch).map((line) => infoRow(line.icon, line.text)),
             { spacing: "sm" },
           ),
         ],
@@ -626,7 +564,7 @@ export function confirmCancelGame(
   return flexMessage(
     "ยืนยันยกเลิกรอบตี?",
     bubble({
-      header: header("⚠️ ยกเลิกรอบตีนี้?", COLOR.warn),
+      header: header({ icon: "triangle-exclamation", text: "ยกเลิกรอบตีนี้?" }, COLOR.warn),
       body: vbox(
         [
           title(game.court_name ?? "BADMINTON"),
@@ -651,14 +589,10 @@ function unpaidWarning(unpaid: BillShareRow[]): FlexComponent[] {
     separator("lg"),
     vbox(
       [
-        {
-          type: "text",
-          text: `⚠️ ยังมีคนไม่จ่าย ${unpaid.length} คน — รวม ${formatBaht(total)}`,
-          size: "sm",
-          color: COLOR.warn,
-          weight: "bold",
-          wrap: true,
-        },
+        heading(
+          { icon: "triangle-exclamation", text: `ยังมีคนไม่จ่าย ${unpaid.length} คน — รวม ${formatBaht(total)}` },
+          "warn",
+        ),
         {
           type: "text",
           text: unpaid.map((share) => share.display_name).join(", "),
@@ -682,7 +616,7 @@ export function confirmCloseGame(
   return flexMessage(
     "ปิดรอบตี?",
     bubble({
-      header: header("🏁 ปิดรอบตีนี้?"),
+      header: header({ icon: "flag-checkered", text: "ปิดรอบตีนี้?" }),
       body: vbox(
         [
           title(game.court_name ?? "BADMINTON"),
@@ -746,47 +680,45 @@ export function formatBaht(satang: number): string {
   });
 }
 
-export function askCourtFee(pendingId: string): TextMessage {
-  return quickReplyText(
-    "🏟️ ค่าคอร์ทเท่าไหร่?\n\nกดเลือกหรือพิมพ์จำนวนเงินมาได้เลย",
+export function askCourtFee(pendingId: string): FlexMessage {
+  return questionCard(
+    { icon: "building", text: "ค่าคอร์ทเท่าไหร่?" },
+    [note("กดเลือกหรือพิมพ์จำนวนเงินมาได้เลย")],
     [
-      ...COURT_FEE_CHOICES.map((baht) => ({
-        label: `${baht}`,
-        data: wizardData(pendingId, "court_fee", String(baht)),
-      })),
-      { label: "ไม่มีค่าคอร์ท", data: wizardData(pendingId, "court_fee", "skip") },
+      ...COURT_FEE_CHOICES.map((baht) => choice(`${baht}`, wizardData(pendingId, "court_fee", String(baht)))),
+      choice("ไม่มีค่าคอร์ท", wizardData(pendingId, "court_fee", "skip"), "forward"),
     ],
   );
 }
 
-export function askShuttleCount(pendingId: string): TextMessage {
-  return quickReplyText("🏸 ใช้ลูกแบดกี่ลูก?", [
-    ...SHUTTLE_COUNT_CHOICES.map((count) => ({
-      label: `${count} ลูก`,
-      data: wizardData(pendingId, "shuttle_count", String(count)),
-    })),
-    { label: "ไม่มี", data: wizardData(pendingId, "shuttle_count", "0") },
+export function askShuttleCount(pendingId: string): FlexMessage {
+  return questionCard({ icon: "table-tennis-paddle-ball", text: "ใช้ลูกแบดกี่ลูก?" }, [], [
+    ...SHUTTLE_COUNT_CHOICES.map((count) => choice(`${count} ลูก`, wizardData(pendingId, "shuttle_count", String(count)))),
+    choice("ไม่มี", wizardData(pendingId, "shuttle_count", "0"), "forward"),
   ]);
 }
 
-export function askShuttlePrice(pendingId: string, lastPriceSatang: number | null): TextMessage {
+export function askShuttlePrice(pendingId: string, lastPriceSatang: number | null): FlexMessage {
   const last = lastPriceSatang === null ? null : toBaht(lastPriceSatang);
   const choices = [...(last !== null ? [last] : []), ...SHUTTLE_PRICE_CHOICES.filter((baht) => baht !== last)];
 
-  return quickReplyText(
-    "🏸 ลูกละเท่าไหร่?\n\nกดเลือกหรือพิมพ์จำนวนเงินมาได้เลย",
-    choices.map((baht, index) => ({
-      label: index === 0 && last !== null ? `${baht} (ครั้งก่อน)` : `${baht}`,
-      data: wizardData(pendingId, "shuttle_price", String(baht)),
-    })),
+  return questionCard(
+    { icon: "table-tennis-paddle-ball", text: "ลูกละเท่าไหร่?" },
+    [note("กดเลือกหรือพิมพ์จำนวนเงินมาได้เลย")],
+    choices.map((baht, index) =>
+      choice(
+        index === 0 && last !== null ? `${baht} (ครั้งก่อน)` : `${baht}`,
+        wizardData(pendingId, "shuttle_price", String(baht)),
+      ),
+    ),
   );
 }
 
-export function askExtraItem(pendingId: string): TextMessage {
-  return quickReplyText("➕ มีค่าอื่นอีกไหม?", [
-    { label: "ค่าน้ำ", data: wizardData(pendingId, "extra", "water") },
-    { label: "อื่น ๆ", data: wizardData(pendingId, "extra", "other") },
-    { label: "ไม่มีแล้ว", data: wizardData(pendingId, "extra", "done") },
+export function askExtraItem(pendingId: string): FlexMessage {
+  return questionCard({ icon: "plus", text: "มีค่าอื่นอีกไหม?" }, [], [
+    choice("ค่าน้ำ", wizardData(pendingId, "extra", "water"), "bottle-water"),
+    choice("อื่น ๆ", wizardData(pendingId, "extra", "other"), "plus"),
+    choice("ไม่มีแล้ว", wizardData(pendingId, "extra", "done"), "check"),
   ]);
 }
 
@@ -798,19 +730,17 @@ export function askOtherItem(): TextMessage {
   return text('➕ พิมพ์ชื่อรายการกับจำนวนเงินมาในบรรทัดเดียว\n\nเช่น "ค่าเช่าไม้ 100"');
 }
 
-function itemIcon(label: string): string {
-  if (label === "ค่าคอร์ท") return "🏟️";
-  if (label === "ลูกแบด") return "🏸";
-  if (label.includes("น้ำ")) return "💧";
-  return "➕";
+function itemIcon(label: string): IconName {
+  if (label === "ค่าคอร์ท") return "building";
+  if (label === "ลูกแบด") return "table-tennis-paddle-ball";
+  if (label.includes("น้ำ")) return "bottle-water";
+  return "plus";
 }
 
 function itemLabel(item: { label: string; quantity: number; unit_price_satang: number }): string {
-  const detail =
-    item.quantity > 1
-      ? `${item.label} ${item.quantity} ลูก × ${formatBaht(item.unit_price_satang)}`
-      : item.label;
-  return `${itemIcon(item.label)} ${detail}`;
+  return item.quantity > 1
+    ? `${item.label} ${item.quantity} ลูก × ${formatBaht(item.unit_price_satang)}`
+    : item.label;
 }
 
 /** ชื่อคนร่วมจ่ายของรายการ ถ้าเก็บทุกคนในบิลก็ไม่ต้องไล่ชื่อให้รก */
@@ -837,7 +767,7 @@ function billBody(
       items.map((item) =>
         vbox(
           [
-            amountRow(itemLabel(item), formatBaht(item.amount_satang)),
+            amountRow(itemLabel(item), formatBaht(item.amount_satang), false, itemIcon(item.label)),
             note(payerLabel(item.payers, headCount)),
           ],
           { spacing: "none" },
@@ -869,9 +799,9 @@ function outstandingRows(shares: BillShareRow[]): FlexComponent[] {
   return [
     vbox(
       [
-        { type: "text", text: "⭕ ยังไม่จ่าย", size: "sm", weight: "bold", color: COLOR.warn },
+        heading({ icon: "circle-exclamation", text: "ยังไม่จ่าย" }, "warn"),
         ...shareRows(unpaid),
-        ...(paid.length > 0 ? [note(`✅ จ่ายแล้ว ${paid.length} คน`, COLOR.accent)] : []),
+        ...(paid.length > 0 ? [heading({ icon: "circle-check", text: `จ่ายแล้ว ${paid.length} คน` }, "accent", "xs")] : []),
       ],
       { spacing: "sm", margin: "lg" },
     ),
@@ -888,7 +818,7 @@ export function confirmBill(
   return flexMessage(
     "ส่งบิลเข้ากลุ่มเลยไหม?",
     bubble({
-      header: header("💰 ตรวจบิลก่อนส่ง"),
+      header: header({ icon: "receipt", text: "ตรวจบิลก่อนส่ง" }),
       body: vbox(
         [
           ...billBody(title, items, totalSatang, shares),
@@ -907,12 +837,12 @@ export function billCard(
   bill: BillRow,
   items: BillItemRow[],
   shares: BillShareRow[],
-  headline?: string,
+  headline?: Headline,
 ): FlexMessage {
   const { unpaidTotalSatang, settled } = summarize(shares);
 
   return flexMessage(
-    headline ?? `บิล ${bill.title}`,
+    headline?.text ?? `บิล ${bill.title}`,
     bubble({
       ...(headline ? { header: header(headline) } : {}),
       body: vbox(
@@ -924,11 +854,11 @@ export function billCard(
           vbox(
             [
               ...(bill.promptpay
-                ? [infoRow("💸", `โอนให้ ${creatorName(shares, bill)} · ${formatPromptPay(bill.promptpay)}`)]
+                ? [infoRow("money-bill-wave", `โอนให้ ${creatorName(shares, bill)} · ${formatPromptPay(bill.promptpay)}`)]
                 : []),
-              // ใช้ 💰 ไม่ใช่ ⭕ เพราะ ⭕ ถูกใช้เป็นหัวรายชื่อคนค้างไปแล้วข้างบน
+              // ใช้รูปเหรียญ ไม่ใช่ไอคอนเตือน เพราะไอคอนเตือนเป็นหัวรายชื่อคนค้างไปแล้วข้างบน
               infoRow(
-                settled ? "✅" : "💰",
+                settled ? "circle-check" : "coins",
                 settled ? "จ่ายครบทุกคนแล้ว" : `ยังไม่ได้รับ ${formatBaht(unpaidTotalSatang)}`,
               ),
             ],
@@ -947,13 +877,13 @@ function creatorName(shares: BillShareRow[], bill: BillRow): string {
 }
 
 /** รายชื่อว่าใครจ่ายแล้วใครยังค้าง แยกเป็นสองกลุ่มให้กวาดตาดูจบในทีเดียว */
-function payerGroup(heading: string, color: string, names: string[]): FlexComponent[] {
+function payerGroup(group: Headline, tone: "accent" | "warn", names: string[]): FlexComponent[] {
   if (names.length === 0) return [];
 
   return [
     vbox(
       [
-        { type: "text", text: `${heading} (${names.length})`, size: "sm", weight: "bold", color },
+        heading({ icon: group.icon, text: `${group.text} (${names.length})` }, tone),
         { type: "text", text: names.join(", "), size: "sm", color: COLOR.ink, wrap: true },
       ],
       { spacing: "xs", margin: "lg" },
@@ -971,17 +901,17 @@ export function unpaidList(bill: BillRow, shares: BillShareRow[]): FlexMessage {
       body: vbox(
         [
           title(bill.title),
-          ...payerGroup("✅ จ่ายแล้ว", COLOR.accent, names(paid)),
+          ...payerGroup({ icon: "circle-check", text: "จ่ายแล้ว" }, "accent", names(paid)),
           ...(settled
-            ? [note("🎉 จ่ายครบทุกคนแล้ว", COLOR.accent)]
+            ? [heading({ icon: "circle-check", text: "จ่ายครบทุกคนแล้ว" })]
             : [
-                ...payerGroup("⭕ ยังไม่จ่าย", COLOR.warn, names(unpaid)),
+                ...payerGroup({ icon: "circle-exclamation", text: "ยังไม่จ่าย" }, "warn", names(unpaid)),
                 separator("lg"),
                 vbox(
                   [
                     amountRow("ยังไม่ได้รับ", formatBaht(unpaidTotalSatang), true),
                     ...(bill.promptpay
-                      ? [infoRow("💸", `พร้อมเพย์ ${formatPromptPay(bill.promptpay)}`)]
+                      ? [infoRow("money-bill-wave", `พร้อมเพย์ ${formatPromptPay(bill.promptpay)}`)]
                       : []),
                   ],
                   { spacing: "sm", margin: "lg" },
@@ -1080,7 +1010,7 @@ export function confirmCancelBill(
   return flexMessage(
     "ยกเลิกบิล?",
     bubble({
-      header: header("⚠️ ยกเลิกบิลนี้?", COLOR.warn),
+      header: header({ icon: "triangle-exclamation", text: "ยกเลิกบิลนี้?" }, COLOR.warn),
       body: vbox(
         [
           title(bill.title),
@@ -1126,13 +1056,10 @@ export function digestCard(lines: {
     body.push(
       vbox(
         [
-          {
-            type: "text",
-            text: lines.gameIsOverdue ? "🏸 รอบที่ยังไม่ได้ปิด" : "🏸 มีนัด",
-            size: "sm",
-            weight: "bold",
-            color: lines.gameIsOverdue ? COLOR.warn : COLOR.accent,
-          },
+          heading(
+            { icon: "table-tennis-paddle-ball", text: lines.gameIsOverdue ? "รอบที่ยังไม่ได้ปิด" : "มีนัด" },
+            lines.gameIsOverdue ? "warn" : "accent",
+          ),
           {
             type: "text",
             text: `${formatThaiDate(playDate)} ${formatTimeRange(startTime, durationMinutes)}${courtName ? ` · ${courtName}` : ""}`,
@@ -1161,7 +1088,7 @@ export function digestCard(lines: {
     body.push(
       vbox(
         [
-          { type: "text", text: "💰 บิลค้างจ่าย", size: "sm", weight: "bold", color: COLOR.warn },
+          heading({ icon: "coins", text: "บิลค้างจ่าย" }, "warn"),
           {
             type: "text",
             text: `${lines.unpaidBillCount} ใบ ยังไม่ได้รับ ${formatBaht(lines.unpaidTotalSatang)}`,
@@ -1179,7 +1106,7 @@ export function digestCard(lines: {
   return flexMessage(
     "สรุปประจำสัปดาห์",
     bubble({
-      header: header("☀️ สรุปประจำสัปดาห์"),
+      header: header({ icon: "sun", text: "สรุปประจำสัปดาห์" }),
       body: vbox(body, { paddingAll: "20px" }),
     }),
   );

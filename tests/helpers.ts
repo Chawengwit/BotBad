@@ -58,10 +58,11 @@ export const textEvent = (text: string, source: object | undefined, replyToken =
  * รวมไว้ที่เดียวเพราะทุกชุดเทสต้องการเหมือนกัน และรูปแบบข้อความเปลี่ยนได้เรื่อย ๆ
  */
 
-type AnyAction = { label?: string; data?: string; uri?: string };
+type AnyAction = { type?: string; label?: string; data?: string; uri?: string; displayText?: string; mode?: string };
 type AnyComponent = {
   type: string;
   text?: string;
+  url?: string;
   layout?: string;
   contents?: AnyComponent[];
   action?: AnyAction;
@@ -139,20 +140,40 @@ export function buttonData(messages: unknown[], label: string): string | undefin
   return undefined;
 }
 
-/** ป้ายของทุกปุ่มในข้อความนี้ */
-export function buttonLabels(message: unknown): string[] {
+/**
+ * ปุ่มบน Flex คือ component ชนิด button หรือ box ที่ผูก action ไว้ (ปุ่มที่มีไอคอน)
+ * ข้อความที่ผูก action อย่างลิงก์แผนที่ไม่นับเป็นปุ่ม
+ */
+function isFlexButton(node: AnyComponent): boolean {
+  return node.action !== undefined && (node.type === "button" || node.type === "box");
+}
+
+/** action ของทุกปุ่มในข้อความนี้ ไม่ว่าจะอยู่ใน template, quick reply หรือบน Flex */
+export function buttonActions(message: unknown): AnyAction[] {
   const any = message as AnyMessage;
 
   return [
     ...(any.template?.actions ?? []),
     ...(any.quickReply?.items ?? []).map((item) => item.action),
     ...flexParts(any)
-      .filter((node) => node.type === "button")
+      .filter(isFlexButton)
       .map((node) => node.action)
       .filter((action): action is AnyAction => action !== undefined),
-  ]
+  ];
+}
+
+/** ป้ายของทุกปุ่มในข้อความนี้ */
+export function buttonLabels(message: unknown): string[] {
+  return buttonActions(message)
     .map((action) => action.label)
     .filter((label): label is string => typeof label === "string");
+}
+
+/** URL ของไอคอนทุกตัวในการ์ด */
+export function iconUrls(message: unknown): string[] {
+  return flexParts(message as AnyMessage)
+    .filter((node) => node.type === "icon")
+    .map((node) => node.url ?? "");
 }
 
 /** บอทแนบปุ่มมากับข้อความนี้ไหม (spec §23) */
@@ -161,7 +182,7 @@ export function hasButtons(message: unknown): boolean {
 
   if (any.type === "template") return true;
   if (any.quickReply !== undefined) return true;
-  return flexParts(any).some((node) => node.type === "button");
+  return flexParts(any).some(isFlexButton);
 }
 
 /** ตัวอย่างข้อมูลบิลที่หลายชุดเทสใช้ร่วมกัน (PRP guests-split-bills-and-digest §5) */

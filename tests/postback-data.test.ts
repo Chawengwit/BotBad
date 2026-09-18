@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { parsePostbackData } from "@/router/postback";
 import { askCourtCount, askDate, askDuration, askTime, confirmCreateGame } from "@/line/messages";
-import { buttonData, messageText } from "./helpers";
+import { buttonActions, buttonData, messageText } from "./helpers";
 import { missingDraftFields } from "@/services/game.service";
 
 const PENDING_ID = "6c2a2f16-9a7f-4f8e-9b4e-2d0f1a2b3c4d";
@@ -54,7 +54,7 @@ describe("parsePostbackData", () => {
 describe("ปุ่มที่บอทส่งออกไป", () => {
   it("ปุ่มจำนวนคอร์ทมี 4 ตัวเลือกและอ้าง pending เดียวกัน", () => {
     const message = askCourtCount(PENDING_ID);
-    const actions = message.template.actions;
+    const actions = buttonActions(message);
 
     expect(actions).toHaveLength(4);
     for (const action of actions) {
@@ -64,7 +64,7 @@ describe("ปุ่มที่บอทส่งออกไป", () => {
   });
 
   it("ปุ่มเลือกวันมีตัวเลือกวันนี้ พรุ่งนี้ และปฏิทินที่ห้ามย้อนหลัง", () => {
-    const actions = askDate(PENDING_ID, "2026-09-16").template.actions;
+    const actions = buttonActions(askDate(PENDING_ID, "2026-09-16"));
     const picker = actions.find((action) => action.type === "datetimepicker");
 
     expect(actions.map((action) => action.label)).toEqual(["วันนี้", "พรุ่งนี้", "เลือกวัน"]);
@@ -72,12 +72,12 @@ describe("ปุ่มที่บอทส่งออกไป", () => {
   });
 
   it("ปุ่มเวลาและระยะเวลาส่งค่าที่ใช้ได้จริง", () => {
-    const timeValues = askTime(PENDING_ID).template.actions.map(
+    const timeValues = buttonActions(askTime(PENDING_ID)).map(
       (action) => parsePostbackData((action as { data: string }).data)?.["value" as never],
     );
     expect(timeValues).toEqual(["18:00", "19:00", "20:00", "picker"]);
 
-    const durationValues = askDuration(PENDING_ID).template.actions.map(
+    const durationValues = buttonActions(askDuration(PENDING_ID)).map(
       (action) => parsePostbackData((action as { data: string }).data)?.["value" as never],
     );
     expect(durationValues).toEqual(["60", "120", "180"]);

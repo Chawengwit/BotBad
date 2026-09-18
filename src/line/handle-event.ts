@@ -124,7 +124,17 @@ async function resolveMessages(
 
     return runOrExplain(async () => {
       const user = await ensureUser(groupId, userId, context.accessToken);
-      const messages = await handlePostback(parsed, { params, lineGroupId: groupId, user });
+
+      let messages: LineMessage[];
+      try {
+        messages = await handlePostback(parsed, { params, lineGroupId: groupId, user });
+      } catch (error) {
+        // ปุ่มในกลุ่มทุกคนกดได้ ถ้าตอบทุกครั้งที่มีคนกดปุ่มของคนอื่นหรือปุ่มที่ใช้ไปแล้ว แชทจะรกเปล่า ๆ
+        if (isAppError(error) && (error.code === "NOT_REQUESTER" || error.code === "PENDING_EXPIRED")) {
+          return null;
+        }
+        throw error;
+      }
 
       // กดปุ่มคือกำลังคุยกับบอทอยู่ ต่ออายุโหมดฟังให้ ไม่ใช่ปล่อยหมดอายุกลางทาง
       await openListeningWindow(groupId, userId).catch(() => {});

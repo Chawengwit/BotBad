@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { askPromptPay, formatPromptPay } from "@/line/messages";
+import { buttonActions, buttonLabels } from "./helpers";
 import { editPatchSchema } from "@/services/game-admin.service";
 import { gameDraftSchema, promptPaySchema } from "@/services/game.service";
 
@@ -73,17 +74,12 @@ describe("formatPromptPay", () => {
 
 describe("คำถามเลขพร้อมเพย์", () => {
   it("กลุ่มที่ยังไม่เคยใส่ มีแค่ปุ่มข้าม", () => {
-    const labels = (askPromptPay(PENDING_ID, null).quickReply?.items ?? []).map(
-      (item) => item.action.label,
-    );
-    expect(labels).toEqual(["ข้าม"]);
+    expect(buttonLabels(askPromptPay(PENDING_ID, null))).toEqual(["ข้าม"]);
   });
 
   it("กลุ่มที่เคยใส่แล้ว มีปุ่มใช้เลขเดิมขึ้นก่อน", () => {
-    const items = askPromptPay(PENDING_ID, "0812345678").quickReply?.items ?? [];
-    expect(items.map((item) => item.action.label)).toEqual(["ใช้ 081-234-5678", "ข้าม"]);
-
-    const reuse = items[0]?.action;
-    expect(reuse && "data" in reuse ? reuse.data : "").toContain("step=promptpay&value=reuse");
+    const actions = buttonActions(askPromptPay(PENDING_ID, "0812345678"));
+    expect(actions.map((action) => action.label)).toEqual(["ใช้ 081-234-5678", "ข้าม"]);
+    expect(actions[0]?.data).toContain("step=promptpay&value=reuse");
   });
 });

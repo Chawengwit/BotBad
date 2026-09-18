@@ -390,7 +390,7 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
     const stale: Collected[] = [];
     await handleEvent(postbackEvent(staleConfirm, owner.lineUserId), contextFor(stale));
 
-    expect(messageTexts(stale[0]!.messages)).toContain("หมดอายุ");
+    expect(stale).toHaveLength(0);
     const rows = await sql<{ id: string; status: string }[]>`
       SELECT id, status FROM games WHERE id = ${newGame.id}
     `;

@@ -1,6 +1,19 @@
 import { describe, expect, it } from "vitest";
 import type { FlexBox, FlexComponent, FlexMessage, LineMessage } from "@/lib/line";
 import {
+  askCourtCount,
+  askCourtFee,
+  askDate,
+  askDuration,
+  askExtraItem,
+  askLocation,
+  askMaxPlayers,
+  askPromptPay,
+  askSameVenue,
+  askShuttleCount,
+  askShuttlePrice,
+  askTime,
+  askWhen,
   billCard,
   confirmBill,
   confirmCancelBill,
@@ -8,12 +21,17 @@ import {
   confirmCloseGame,
   confirmCreateGame,
   confirmEditGame,
+  digestCard,
+  editMenu,
+  fallbackMenu,
   gameCard,
+  greeting,
+  helpMenu,
   playerList,
   unpaidList,
 } from "@/line/messages";
 import type { BillRow, BillShareRow, GameRow } from "@/repositories/types";
-import { makeBill, makeItem, makeShare, messageText } from "./helpers";
+import { buttonLabels, hasButtons, makeBill, makeItem, makeShare, messageText } from "./helpers";
 
 const PENDING_ID = "11111111-1111-4111-8111-111111111111";
 /** altText ของ LINE ยาวได้ไม่เกิน 400 ตัวอักษร */
@@ -67,7 +85,7 @@ const draft = {
 
 /** ทุกการ์ด Flex ที่บอทส่งออกไปได้จริง รวมเคสที่ข้อมูลไม่ครบด้วย */
 const CARDS: [string, LineMessage][] = [
-  ["การ์ดรอบตี", gameCard(game, 5, "🏸 เปิดรอบตีแล้ว")],
+  ["การ์ดรอบตี", gameCard(game, 5, { icon: "table-tennis-paddle-ball", text: "เปิดรอบตีแล้ว" })],
   ["การ์ดรอบตี ไม่มีหัวข้อและไม่มีแผนที่", gameCard(bareGame, 0)],
   ["รายชื่อผู้เล่น", playerList(game, [{ display_name: "เชวง" }, { display_name: "Bank" }])],
   ["รายชื่อตอนยังไม่มีใครลง", playerList(bareGame, [])],
@@ -78,12 +96,44 @@ const CARDS: [string, LineMessage][] = [
   ["ยืนยันปิดรอบ", confirmCloseGame(PENDING_ID, game, 8)],
   ["ยืนยันปิดรอบ ทั้งที่ยังมีคนค้าง", confirmCloseGame(PENDING_ID, game, 8, [mixedShares[1]!])],
   ["ยืนยันส่งบิล", confirmBill(PENDING_ID, "รอบ พุธ 16 ก.ย.", items, 70000, mixedShares)],
-  ["การ์ดบิล", billCard(bill, items, mixedShares, "💰 คิดเงินแล้ว")],
+  ["การ์ดบิล", billCard(bill, items, mixedShares, { icon: "receipt", text: "คิดเงินแล้ว" })],
   ["การ์ดบิล ไม่มีพร้อมเพย์และจ่ายครบแล้ว", billCard(bareBill, items, allPaid)],
   ["ใครยังไม่จ่าย", unpaidList(bill, mixedShares)],
   ["ใครยังไม่จ่าย ตอนจ่ายครบแล้ว", unpaidList(bareBill, allPaid)],
   ["ยืนยันยกเลิกบิล", confirmCancelBill(PENDING_ID, bill, mixedShares)],
   ["ยืนยันยกเลิกบิล ตอนยังไม่มีใครจ่าย", confirmCancelBill(PENDING_ID, bill, [share("2", "Bank", false)])],
+];
+
+/** การ์ดคำถามและเมนูที่มีปุ่ม ตรวจโครงสร้างร่วมกับการ์ดชุดบน */
+const QUESTION_CARDS: [string, LineMessage][] = [
+  ["ถามจำนวนคอร์ท", askCourtCount(PENDING_ID)],
+  ["ถามวันและเวลา", askWhen(PENDING_ID)],
+  ["ถามวัน", askDate(PENDING_ID)],
+  ["ถามเวลา", askTime(PENDING_ID)],
+  ["ถามกี่ชั่วโมง", askDuration(PENDING_ID)],
+  ["ถามจำนวนคน", askMaxPlayers(PENDING_ID, 2)],
+  ["ถามที่เดิม", askSameVenue(PENDING_ID, "ABC Badminton", true, "0812345678")],
+  ["ถามที่เดิม ไม่มีแผนที่และพร้อมเพย์", askSameVenue(PENDING_ID, "ABC Badminton", false, null)],
+  ["ถามลิงก์แผนที่", askLocation(PENDING_ID)],
+  ["ถามพร้อมเพย์", askPromptPay(PENDING_ID, "1234567890123")],
+  ["ถามพร้อมเพย์ ไม่มีเลขเดิม", askPromptPay(PENDING_ID, null)],
+  ["เมนูแก้ไข", editMenu(PENDING_ID)],
+  ["ถามค่าคอร์ท", askCourtFee(PENDING_ID)],
+  ["ถามจำนวนลูกแบด", askShuttleCount(PENDING_ID)],
+  ["ถามราคาลูกแบด", askShuttlePrice(PENDING_ID, null)],
+  ["ถามค่าอื่น ๆ", askExtraItem(PENDING_ID)],
+  ["ทักทาย", greeting()],
+  ["เมนูช่วยเหลือ", helpMenu()],
+  ["เมนูสำรอง", fallbackMenu()],
+  [
+    "สรุปประจำสัปดาห์",
+    digestCard({
+      game: { playDate: "2026-09-16", startTime: "19:00", durationMinutes: 120, courtName: "ABC", joined: 5, max: 8 },
+      gameIsOverdue: true,
+      unpaidBillCount: 2,
+      unpaidTotalSatang: 70000,
+    }),
+  ],
 ];
 
 function isFlex(message: LineMessage): message is FlexMessage {
@@ -119,7 +169,7 @@ function components(message: FlexMessage): FlexComponent[] {
  * เทสชุดนี้จึงตรวจกติกาที่พังง่ายที่สุดกับการ์ดทุกใบ รวมเคสข้อมูลไม่ครบ
  */
 describe("โครงสร้าง Flex ถูกกติกาของ LINE", () => {
-  it.each(CARDS)("%s", (_label, message) => {
+  it.each([...CARDS, ...QUESTION_CARDS])("%s", (_label, message) => {
     expect(isFlex(message)).toBe(true);
     if (!isFlex(message)) return;
 
@@ -136,22 +186,27 @@ describe("โครงสร้าง Flex ถูกกติกาของ LIN
     // box ที่ไม่มีลูกเลย LINE ปฏิเสธทั้งข้อความ
     for (const box of boxes(message)) {
       expect(box.contents.length).toBeGreaterThan(0);
+
+      const childTypes = box.contents.map((child) => child.type);
+      // icon วางได้เฉพาะใน box แบบ baseline และ baseline มีลูกได้แค่ icon กับ text
+      if (box.layout === "baseline") {
+        for (const type of childTypes) expect(["icon", "text"]).toContain(type);
+      } else {
+        expect(childTypes).not.toContain("icon");
+      }
     }
 
     for (const node of components(message)) {
       // ข้อความว่างก็โดนปฏิเสธเหมือนกัน
       if (node.type === "text") expect(node.text.length).toBeGreaterThan(0);
-      // ปุ่มต้องมี action เสมอ
-      if (node.type === "button") expect(node.action).toBeDefined();
     }
   });
 
-  it("การ์ดที่ขอให้กดยืนยันมีปุ่มที่ footer ครบสองปุ่ม", () => {
+  it("การ์ดที่ขอให้กดยืนยันมีปุ่มท้ายการ์ดครบสองปุ่ม", () => {
     for (const [label, message] of CARDS) {
       if (!label.startsWith("ยืนยัน") || !isFlex(message)) continue;
 
-      const buttons = components(message).filter((node) => node.type === "button");
-      expect(buttons, label).toHaveLength(2);
+      expect(buttonLabels({ type: "flex", contents: { footer: message.contents.footer } }), label).toHaveLength(2);
     }
   });
 
@@ -159,12 +214,12 @@ describe("โครงสร้าง Flex ถูกกติกาของ LIN
     for (const [label, message] of CARDS) {
       if (label.startsWith("ยืนยัน") || !isFlex(message)) continue;
 
-      expect(components(message).filter((node) => node.type === "button"), label).toHaveLength(0);
+      expect(hasButtons(message), label).toBe(false);
     }
   });
 
   it("ลิงก์แผนที่กดได้ เพราะ Flex ไม่แปลง URL ในข้อความให้เอง", () => {
-    const card = gameCard(game, 0, "🏸 เปิดรอบตีแล้ว");
+    const card = gameCard(game, 0, { icon: "table-tennis-paddle-ball", text: "เปิดรอบตีแล้ว" });
     if (!isFlex(card)) throw new Error("การ์ดรอบตีต้องเป็น Flex");
 
     const linked = components(card).find(

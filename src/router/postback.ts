@@ -168,12 +168,12 @@ async function runConfirm(
   switch (pending.action_type) {
     case "create_game": {
       const game = await confirmCreateGameService(pending.id, lineGroupId, userId);
-      return [gameCard(game, 0, "🏸 เปิดรอบตีแล้ว")];
+      return [gameCard(game, 0, { icon: "table-tennis-paddle-ball", text: "เปิดรอบตีแล้ว" })];
     }
     case "edit_game": {
       const { game, joinedCount } = await applyEditGame(pending.id, lineGroupId, userId);
       return [
-        gameCard(game, joinedCount, "✏️ แก้ไขรอบเรียบร้อย"),
+        gameCard(game, joinedCount, { icon: "pen", text: "แก้ไขรอบเรียบร้อย" }),
         ...(game.edit_count >= NAG_AFTER_CHANGES ? [nagEdits(game.edit_count)] : []),
       ];
     }
@@ -188,7 +188,7 @@ async function runConfirm(
     }
     case "create_bill": {
       const { bill, items, shares } = await confirmCreateBill(pending.id, lineGroupId, userId);
-      return [billCard(bill, items, shares, "💰 คิดเงินแล้ว")];
+      return [billCard(bill, items, shares, { icon: "receipt", text: "คิดเงินแล้ว" })];
     }
     case "cancel_bill": {
       await confirmCancelBill(pending.id, lineGroupId, userId);

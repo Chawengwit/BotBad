@@ -254,7 +254,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     expect(await sql`SELECT id FROM games WHERE line_group_id = ${GROUP_ID}`).toHaveLength(1);
   });
 
-  it("คนอื่นกดปุ่มของคนที่สั่งไม่ได้", async () => {
+  it("คนอื่นกดปุ่มของคนที่สั่ง บอทเงียบ และคนสั่งยังกดต่อได้", async () => {
     const owner = newUser();
     const stranger = newUser();
     const collected: Collected[] = [];
@@ -264,9 +264,32 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
 
     const strangerReplies: Collected[] = [];
     await handleEvent(postbackEvent(courtData, stranger), makeContext(strangerReplies));
+    expect(strangerReplies).toHaveLength(0);
 
-    expect(messageTexts(strangerReplies[0]!.messages)).toContain("เฉพาะคนที่สั่ง");
+    const ownerReplies: Collected[] = [];
+    await handleEvent(postbackEvent(courtData, owner), makeContext(ownerReplies));
+    expect(messageTexts(ownerReplies[0]!.messages)).toContain("ตีเมื่อไหร่");
   });
+
+  it("คนอื่นกดยืนยันแทน บอทเงียบ และยังไม่เปิดรอบ", async () => {
+    const owner = newUser();
+    const stranger = newUser();
+    const collected: Collected[] = [];
+    const context = makeContext(collected);
+
+    await runUntilCourtName(owner, collected);
+    await handleEvent(textEvent("คอร์ทแย่งกด", owner), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), owner), context);
+    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), owner), context);
+    const confirmData = actionData(collected.at(-1)!.messages, "เปิดตี");
+
+    const strangerReplies: Collected[] = [];
+    await handleEvent(postbackEvent(confirmData, stranger), makeContext(strangerReplies));
+
+    expect(strangerReplies).toHaveLength(0);
+    expect(await sql`SELECT id FROM games WHERE line_group_id = ${GROUP_ID}`).toHaveLength(0);
+  });
+
 
   it("ปุ่มยืนยันใช้ได้ครั้งเดียว", async () => {
     const userId = newUser();
@@ -283,7 +306,8 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     const again: Collected[] = [];
     await handleEvent(postbackEvent(confirmData, userId), makeContext(again));
 
-    expect(messageTexts(again[0]!.messages)).toContain("หมดอายุหรือถูกใช้ไปแล้ว");
+    // กดซ้ำไม่ต้องตอบ แชทกลุ่มจะได้ไม่รก
+    expect(again).toHaveLength(0);
     expect(await sql`SELECT id FROM games WHERE line_group_id = ${GROUP_ID}`).toHaveLength(1);
   });
 
@@ -303,7 +327,7 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     const expired: Collected[] = [];
     await handleEvent(postbackEvent(confirmData, userId), makeContext(expired));
 
-    expect(messageTexts(expired[0]!.messages)).toContain("หมดอายุ");
+    expect(expired).toHaveLength(0);
     expect(await sql`SELECT id FROM games WHERE line_group_id = ${GROUP_ID}`).toHaveLength(0);
   });
 

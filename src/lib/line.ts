@@ -6,11 +6,11 @@ export const MAX_REPLY_MESSAGES = 5;
 const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_ERROR_DETAIL_LENGTH = 300;
 
+/** ไม่ใช้ displayText เพราะ LINE จะโพสต์ข้อความในนามคนกด คนที่กดผิดคนจะทิ้งข้อความลอย ๆ ไว้ในกลุ่ม */
 export type PostbackAction = {
   type: "postback";
   label: string;
   data: string;
-  displayText?: string;
 };
 
 export type DatetimePickerAction = {
@@ -39,23 +39,9 @@ export type UriAction = {
 
 export type MessageAction = PostbackAction | DatetimePickerAction | TextMessageAction | UriAction;
 
-export type QuickReply = { items: { type: "action"; action: MessageAction }[] };
-
 export type TextMessage = {
   type: "text";
   text: string;
-  /** ปุ่มลัดเหนือช่องพิมพ์ ใช้ได้ทั้งในกลุ่มและแชทเดี่ยว รองรับได้ถึง 13 ปุ่ม */
-  quickReply?: QuickReply;
-};
-
-export type ButtonsMessage = {
-  type: "template";
-  altText: string;
-  template: {
-    type: "buttons";
-    text: string;
-    actions: MessageAction[];
-  };
 };
 
 /**
@@ -75,18 +61,17 @@ export type FlexText = {
   action?: MessageAction;
 };
 
+/** รูปไอคอนเล็กหน้าข้อความ วางได้เฉพาะใน box แบบ baseline */
+export type FlexIcon = {
+  type: "icon";
+  url: string;
+  size?: string;
+};
+
 export type FlexSeparator = {
   type: "separator";
   margin?: string;
   color?: string;
-};
-
-export type FlexButton = {
-  type: "button";
-  action: MessageAction;
-  style?: "primary" | "secondary" | "link";
-  color?: string;
-  height?: "sm" | "md";
 };
 
 export type FlexBox = {
@@ -100,9 +85,12 @@ export type FlexBox = {
   backgroundColor?: string;
   cornerRadius?: string;
   flex?: number;
+  justifyContent?: "flex-start" | "center" | "flex-end" | "space-between" | "space-around" | "space-evenly";
+  /** box ทั้งกล่องกดได้ ใช้ทำปุ่มที่มีไอคอน */
+  action?: MessageAction;
 };
 
-export type FlexComponent = FlexBox | FlexText | FlexSeparator | FlexButton;
+export type FlexComponent = FlexBox | FlexText | FlexIcon | FlexSeparator;
 
 export type FlexBubble = {
   type: "bubble";
@@ -119,7 +107,7 @@ export type FlexMessage = {
   contents: FlexBubble;
 };
 
-export type LineMessage = TextMessage | ButtonsMessage | FlexMessage;
+export type LineMessage = TextMessage | FlexMessage;
 
 async function callLineApi(path: string, init: RequestInit, accessToken: string): Promise<Response> {
   const response = await fetch(`${LINE_API}${path}`, {
