@@ -51,7 +51,7 @@ Postback ไม่เรียก LLM เด็ดขาด
 7. ถ้า response มี functionCalls:
      a. validate args ด้วย zod
      b. Tool Executor เรียก Service (ใส่ user / group จาก LINE event)
-     c. เก็บ UI attachment (ปุ่มยืนยัน, quick reply) ไว้ฝั่ง App
+     c. เก็บ UI attachment (การ์ด Flex, การ์ดยืนยันพร้อมปุ่ม) ไว้ฝั่ง App
      d. ส่ง functionResponse กลับให้ Gemini
      e. วนกลับไปข้อ 7 (สูงสุด 3 รอบ)
 8. ได้ข้อความสุดท้ายจาก Gemini
@@ -455,7 +455,7 @@ Tool Executor เก็บ UI ไว้ฝั่ง App ระหว่าง lo
 
 ```text
 1. Text: ข้อความจาก LLM
-2. Flex / Template: UI attachment (ถ้ามี)
+2. Flex: UI attachment (ถ้ามี) ปุ่มอยู่ท้ายการ์ด (spec §23)
 ```
 
 ถ้ามีหลาย `propose_*` ในข้อความเดียว → ใช้อันสุดท้าย และ expire อันก่อนหน้า
@@ -480,15 +480,16 @@ Tool Executor เก็บ UI ไว้ฝั่ง App ระหว่าง lo
 4. ถ้าไม่มี → ส่งข้อความ Fallback:
 
 ```text
-🤔 ตอนนี้ผมยังไม่เข้าใจประโยคนี้
+🤔 ผมยังไม่เข้าใจประโยคนี้ครับพี่
 
-ลองเลือกคำสั่งด้านล่างได้เลย
+ลองเลือกจากด้านล่างได้เลย
 ```
 
-Quick Reply:
+เป็นการ์ด Flex พร้อมปุ่มท้ายการ์ด:
 
 ```text
-[ เปิดตี ] [ ลงชื่อ ] [ ถอนชื่อ ] [ ใครตีบ้าง ]
+[ เปิดตี ]   [ ลงชื่อ ]
+[ ถอนชื่อ ] [ ใครตีบ้าง ]
 ```
 
 ---
@@ -589,7 +590,7 @@ LLM →  join_game {}
 Tool → { ok: true, data: { current_players: 6, max_players: 8 } }
 
 Bot:   ✅ ลงชื่อให้แล้ว ตอนนี้ 6/8 คน
-       [Quick Reply: ลงชื่อ / ถอนชื่อ / รายชื่อ]
+       (ผลลัพธ์ไม่มีปุ่ม spec §23)
 ```
 
 ## 11.3 ถามว่าเต็มหรือยัง
