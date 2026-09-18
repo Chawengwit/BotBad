@@ -191,6 +191,11 @@ describe("โครงสร้าง Flex ถูกกติกาของ LIN
       // icon วางได้เฉพาะใน box แบบ baseline และ baseline มีลูกได้แค่ icon กับ text
       if (box.layout === "baseline") {
         for (const type of childTypes) expect(["icon", "text"]).toContain(type);
+        // ลูกของ baseline ใช้ gravity กับ offsetBottom ไม่ได้ จัดไอคอนให้อยู่กลางต้องใช้ offsetTop
+        for (const child of box.contents) {
+          expect(child).not.toHaveProperty("gravity");
+          expect(child).not.toHaveProperty("offsetBottom");
+        }
       } else {
         expect(childTypes).not.toContain("icon");
       }
@@ -199,6 +204,8 @@ describe("โครงสร้าง Flex ถูกกติกาของ LIN
     for (const node of components(message)) {
       // ข้อความว่างก็โดนปฏิเสธเหมือนกัน
       if (node.type === "text") expect(node.text.length).toBeGreaterThan(0);
+      // ไอคอนที่ไม่ได้กดลงมาจะลอยสูงกว่ากลางตัวหนังสือ
+      if (node.type === "icon") expect(node.offsetTop).toBeDefined();
     }
   });
 

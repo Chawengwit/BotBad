@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { LineMessage } from "@/lib/line";
+import { icon, ICON_COLORS, ICON_NAMES, type IconColor } from "@/line/flex";
 import {
   buttonActions,
   buttonLabels,
@@ -253,8 +254,18 @@ describe("ไอคอนทุกตัวที่การ์ดอ้าง�
     expect(urls.length).toBeGreaterThan(0);
 
     for (const url of urls) {
-      expect(url).toMatch(/^https:\/\/[^/]+\/icons\/[a-z]+\/[a-z0-9-]+\.png$/);
+      expect(url).toMatch(/^https:\/\/[^/]+\/icons\/[0-9a-f]{6}\/[a-z0-9-]+\.png$/);
       const file = join(process.cwd(), "public", new URL(url).pathname);
+      expect(existsSync(file), file).toBe(true);
+    }
+  });
+});
+
+/** เปลี่ยนค่าสีใน COLOR แล้วลืมสร้างไฟล์ชุดใหม่ ไอคอนสีนั้นจะหายไปจากทุกการ์ด */
+describe("มีไฟล์ไอคอนครบทุกชื่อทุกสี", () => {
+  it.each(Object.keys(ICON_COLORS) as IconColor[])("%s", (color) => {
+    for (const name of ICON_NAMES) {
+      const file = join(process.cwd(), "public", new URL(icon(name, color).url).pathname);
       expect(existsSync(file), file).toBe(true);
     }
   });

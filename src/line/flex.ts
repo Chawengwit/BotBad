@@ -17,14 +17,17 @@ import type {
  */
 
 /**
- * สีทั้งหมดที่การ์ดใช้ เลือกให้อ่านออกบนพื้นขาวของ bubble
+ * สีทั้งหมดที่การ์ดใช้ ธีม Retro 80s จากพาเลต "Retro of the 80s" (teal, เหลือง, ชมพู, น้ำเงิน)
  * LINE ไม่เปลี่ยนพื้นหลัง bubble ตามธีมของเครื่อง จึงกำหนดสีตรง ๆ ได้
+ *
+ * highlight (เหลือง) ใช้เป็นพื้นเท่านั้น ตัวหนังสือสีเหลืองบนพื้นขาวอ่านไม่ออก
  */
 export const COLOR = {
-  ink: "#1F2937",
+  ink: "#3B46A4",
   muted: "#6B7280",
-  accent: "#16A34A",
-  warn: "#DC2626",
+  accent: "#00BF9C",
+  warn: "#FA4E93",
+  highlight: "#FFD814",
   line: "#E5E7EB",
   soft: "#F3F4F6",
   onAccent: "#FFFFFF",
@@ -32,7 +35,7 @@ export const COLOR = {
 
 /**
  * ไอคอน Font Awesome Free (solid) ที่การ์ดใช้ ชื่อตรงกับไฟล์ต้นฉบับของ Font Awesome
- * Flex โหลดฟอนต์เองไม่ได้ ไอคอนจึงเป็นไฟล์ PNG ใน public/icons/<สี>/<ชื่อ>.png หนึ่งไฟล์ต่อหนึ่งสี
+ * Flex โหลดฟอนต์เองไม่ได้ ไอคอนจึงเป็นไฟล์ PNG ใน public/icons/<รหัสสี>/<ชื่อ>.png หนึ่งไฟล์ต่อหนึ่งสี
  * เพิ่มชื่อที่นี่แล้วต้องสร้างไฟล์ให้ครบทุกสีด้วย ไม่งั้นไอคอนจะหายไปเฉย ๆ บนการ์ด
  */
 export const ICON_NAMES = [
@@ -68,7 +71,10 @@ export const ICON_NAMES = [
 
 export type IconName = (typeof ICON_NAMES)[number];
 
-/** สีที่มีไฟล์ไอคอนให้ใช้ ไอคอนเป็นรูป เปลี่ยนสีทีหลังไม่ได้ */
+/**
+ * สีที่มีไฟล์ไอคอนให้ใช้ ไอคอนเป็นรูป สีติดมากับไฟล์
+ * เปลี่ยนค่าสีใน COLOR แล้วต้องสร้างไฟล์ชุดใหม่ในโฟลเดอร์ของรหัสสีนั้นด้วย
+ */
 export const ICON_COLORS = {
   white: COLOR.onAccent,
   ink: COLOR.ink,
@@ -81,8 +87,20 @@ export type IconColor = keyof typeof ICON_COLORS;
 /** LINE โหลดรูปจาก URL สาธารณะผ่าน HTTPS เท่านั้น ไฟล์อยู่บนโดเมนเดียวกับ webhook */
 const ICON_BASE_URL = "https://bot-bad.vercel.app/icons";
 
+/**
+ * LINE วางขอบล่างของไอคอนไว้บน baseline ของตัวหนังสือ แต่ตัวพยัญชนะไทยเตี้ยกว่าไอคอนมาก
+ * กลางไอคอนจึงลอยสูงกว่ากลางตัวหนังสือ กดลงมาให้กลางตรงกัน (จูนกับไอคอนขนาด sm ที่การ์ดใช้)
+ * ต้องใช้ offsetTop เพราะ LINE ห้ามใช้ offsetBottom กับลูกของ baseline box
+ */
+const ICON_OFFSET_TOP = "3px";
+
+/**
+ * โฟลเดอร์ไอคอนตั้งชื่อตามรหัสสี ไม่ใช่ตามหน้าที่ของสี
+ * LINE แคชรูปตาม URL ถ้าเปลี่ยนสีแต่ URL เดิม คนในกลุ่มจะยังเห็นไอคอนสีเก่า
+ */
 export function icon(name: IconName, color: IconColor = "accent", size = "sm"): FlexIcon {
-  return { type: "icon", url: `${ICON_BASE_URL}/${color}/${name}.png`, size };
+  const folder = ICON_COLORS[color].slice(1).toLowerCase();
+  return { type: "icon", url: `${ICON_BASE_URL}/${folder}/${name}.png`, size, offsetTop: ICON_OFFSET_TOP };
 }
 
 /** หัวการ์ดหรือหัวข้อ: ไอคอนกับข้อความหนึ่งบรรทัด */
@@ -188,24 +206,22 @@ export type Button = { label: string; action: MessageAction; icon?: IconName; pr
 
 /**
  * ปุ่มที่มีไอคอน สร้างจาก box ที่ผูก action เพราะ component button ของ Flex ใส่ได้แค่ข้อความ
- * ปุ่มหลักพื้นเขียวตัวขาว ปุ่มอื่นพื้นเทาตัวเข้ม
+ * ปุ่มหลักพื้นเหลือง ปุ่มอื่นพื้นเทา ตัวหนังสือกับไอคอนเป็นสีน้ำเงินทั้งคู่
  */
 function buttonBox(button: Button): FlexBox {
-  const color = button.primary ? COLOR.onAccent : COLOR.ink;
-
   return {
     type: "box",
     layout: "baseline",
     action: button.action,
-    backgroundColor: button.primary ? COLOR.accent : COLOR.soft,
+    backgroundColor: button.primary ? COLOR.highlight : COLOR.soft,
     cornerRadius: "md",
     paddingAll: "10px",
     spacing: "sm",
     justifyContent: "center",
     flex: 1,
     contents: [
-      ...(button.icon ? [icon(button.icon, button.primary ? "white" : "ink")] : []),
-      { type: "text", text: button.label, size: "sm", weight: "bold", color, flex: 0 },
+      ...(button.icon ? [icon(button.icon, "ink")] : []),
+      { type: "text", text: button.label, size: "sm", weight: "bold", color: COLOR.ink, flex: 0 },
     ],
   };
 }

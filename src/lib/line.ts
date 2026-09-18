@@ -66,6 +66,8 @@ export type FlexIcon = {
   type: "icon";
   url: string;
   size?: string;
+  /** เลื่อนลงจากตำแหน่งเดิม ลูกของ baseline box ใช้ offsetBottom ไม่ได้ */
+  offsetTop?: string;
 };
 
 export type FlexSeparator = {
