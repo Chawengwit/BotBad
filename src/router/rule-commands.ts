@@ -1,4 +1,5 @@
 import type { LineMessage } from "@/lib/line";
+import { TIME_PATTERN } from "@/lib/time";
 import { askCourtCount, helpMenu } from "@/line/messages";
 import type { LineUserRow } from "@/repositories/types";
 import { startCreateGame } from "@/services/game.service";
@@ -68,7 +69,33 @@ const COMMANDS_WITH_ARGS: readonly RuleCommand[] = [
  */
 const BILL_TITLE_COMMANDS: readonly RuleCommand[] = ["คิดเงิน", "บิล", "ใครยังไม่จ่าย", "ยกเลิกบิล"];
 
-export type ParsedCommand = { command: RuleCommand; args: string };
+export type ParsedCommand = {
+  command: RuleCommand;
+  args: string;
+  /**
+   * ส่วนเติมท้ายพูดถึงวันหรือรอบ ไม่ใช่รายชื่อคน เช่น "ลงชื่อ รอบวันเสาร์" (PRP multi-open-rounds §15)
+   * มี Gemini ให้ Gemini อ่านทั้งประโยค ไม่มีก็ทำเหมือนคำสั่งเปล่า ห้ามกลายเป็นแขกชื่อ "รอบวันเสาร์"
+   */
+  aboutRound?: true;
+};
+
+/** คำสั่งที่ส่วนเติมท้ายเป็นรายชื่อคน แต่ตอนกลุ่มเปิดหลายรอบคนมักพิมพ์วันต่อท้ายแทน */
+const PEOPLE_COMMANDS: readonly RuleCommand[] = ["ลงชื่อ", "ถอนชื่อ"];
+
+const WEEKDAYS = ["อาทิตย์", "จันทร์", "อังคาร", "พุธ", "พฤหัส", "พฤหัสบดี", "ศุกร์", "เสาร์"];
+const RELATIVE_DAYS = ["วันนี้", "คืนนี้", "พรุ่งนี้", "มะรืน", "มะรืนนี้"];
+
+/**
+ * คำนี้พูดถึงวันหรือรอบ ไม่ใช่ชื่อคน
+ * เทียบชื่อวันทั้งคำ ไม่ใช่แค่ขึ้นต้น เพราะชื่อคนอย่าง "วันชัย" "จันทร์เพ็ญ" มีจริง
+ */
+function isRoundWord(word: string): boolean {
+  if (word.startsWith("รอบ") || word.includes("ทุ่ม") || TIME_PATTERN.test(word)) return true;
+  if (RELATIVE_DAYS.includes(word)) return true;
+
+  const day = word.replace(/^วัน/u, "").replace(/(นี้|หน้า)$/u, "");
+  return WEEKDAYS.includes(day);
+}
 
 /** เช็กก่อนแตะฐานข้อมูลหรือเรียก LINE API จะได้ไม่เปลืองกับข้อความที่ยังไม่รองรับ */
 export function isRuleCommand(command: string): command is RuleCommand {
@@ -90,6 +117,9 @@ export function parseCommand(text: string): ParsedCommand | null {
     // ต้องมีตัวคั่นจริง ๆ ไม่ใช่คำอื่นที่บังเอิญขึ้นต้นเหมือนกัน
     if (args.length > 0 && trimmed[command.length] !== undefined && /^[\s,]/u.test(trimmed[command.length]!)) {
       if (BILL_TITLE_COMMANDS.includes(command) && trimmed.includes("\n")) return null;
+      if (PEOPLE_COMMANDS.includes(command) && parseNames(args).some(isRoundWord)) {
+        return { command, args: "", aboutRound: true };
+      }
       return { command, args };
     }
   }

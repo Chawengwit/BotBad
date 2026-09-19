@@ -371,6 +371,35 @@ describe.skipIf(!canRunDbTests())("เปิดได้หลายรอบพ
       expect(await joinedIn(wed)).toEqual(["กิ้ฟ"]);
     });
 
+    /** ทดสอบกับ Gemini จริง 2026-09-19: เว้นวรรคหลัง "ลงชื่อ" แล้ววันกลายเป็นแขกชื่อ "รอบวันเสาร์" */
+    it("พิมพ์ลงชื่อตามด้วยวัน ส่งทั้งประโยคให้ Gemini อ่าน ไม่สร้างแขกชื่อวัน", async () => {
+      await openRound(owner, WED);
+      const sat = await openRound(owner, SAT);
+
+      const seen: unknown[] = [];
+      currentClient = recordingClient([call("join_game", { round_date: "2030-01-19" }), say(LLM_OWN_WORDS)], seen);
+      const reply = await send(give, "บอทจ๋า ลงชื่อ รอบวันเสาร์");
+
+      expect(JSON.stringify(seen[0])).toContain("ลงชื่อ รอบวันเสาร์");
+      expect(messageTexts(reply)).toBe(`✅ กิ้ฟ ลงชื่อแล้ว (${SAT_LABEL})\n👥 1/8 คน`);
+      expect(await joinedIn(sat)).toEqual(["กิ้ฟ"]);
+      expect(await sql`SELECT id FROM users WHERE line_group_id = ${GROUP_ID}`).toHaveLength(0);
+    });
+
+    it("ไม่ได้ตั้ง Gemini พิมพ์ลงชื่อตามด้วยวัน ทำเหมือนพิมพ์ลงชื่อเฉย ๆ", async () => {
+      vi.stubEnv("GEMINI_API_KEY", "");
+      await openRound(owner, WED);
+      const sat = await openRound(owner, SAT);
+
+      const card = await send(give, "บอทจ๋า ลงชื่อ รอบวันเสาร์");
+      expect(messageTexts(card)).toContain("ลงชื่อรอบไหน?");
+      expect(messageTexts(card)).not.toContain("รอบวันเสาร์");
+
+      expect(messageTexts(await press(give, SAT_BUTTON, card))).toBe(`✅ กิ้ฟ ลงชื่อแล้ว (${SAT_LABEL})\n👥 1/8 คน`);
+      expect(await joinedIn(sat)).toEqual(["กิ้ฟ"]);
+      expect(await sql`SELECT id FROM users WHERE line_group_id = ${GROUP_ID}`).toHaveLength(0);
+    });
+
     it("ถอนชื่อคนที่ไม่ได้อยู่รอบไหนเลย บอกว่าไม่อยู่ในรายชื่อรอบไหนเลย", async () => {
       await openRound(owner, WED);
       await openRound(owner, SAT);

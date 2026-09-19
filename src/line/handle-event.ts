@@ -212,8 +212,9 @@ async function resolveMessages(
     const joke = easterEggReply(command);
     if (joke) return [text(joke)];
 
+    // "ลงชื่อ รอบวันเสาร์" พูดถึงรอบ ไม่ใช่รายชื่อคน มี Gemini ให้ Gemini อ่านวันของรอบเอง (PRP multi-open-rounds §15)
     const parsed = parseCommand(command);
-    if (parsed) {
+    if (parsed && !(parsed.aboutRound && gemini)) {
       return runOrExplain(async () => {
         const user = await ensureUser(groupId, userId, context.accessToken);
         return runRuleCommand(parsed, groupId, userId, user, gemini !== null);
@@ -293,7 +294,7 @@ async function resolveMessages(
     //
     // คำสั่งตรงตัวถือว่าคุยกับบอทแน่นอน ผิดพลาดก็ต้องบอก ไม่ใช่เงียบแบบข้อความทั่วไป
     const listeningCommand = parseCommand(messageText);
-    if (listeningCommand) {
+    if (listeningCommand && !listeningCommand.aboutRound) {
       return runRuleCommand(listeningCommand, groupId, userId, user, true);
     }
 
