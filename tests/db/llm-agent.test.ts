@@ -145,7 +145,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
   it("สั่งคิดเงินด้วยประโยคเดียวแล้วได้การ์ดยืนยัน ยังไม่ส่งบิลจริง", async () => {
     const owner = await newUser();
     const game = await openGame(owner.user.id);
-    await joinGame(GROUP_ID, owner.user.id);
+    await joinGame(GROUP_ID, game.id, owner.user.id);
 
     const messages = await run(
       owner,
@@ -170,13 +170,13 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
 
   it("สั่งให้เก็บบางรายการเฉพาะบางคนได้ ยอดรายคนจึงต่างกัน", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner.user.id);
-    await joinGame(GROUP_ID, owner.user.id);
+    const game = await openGame(owner.user.id);
+    await joinGame(GROUP_ID, game.id, owner.user.id);
 
     const bank = await newUser("Bank");
-    await joinGame(GROUP_ID, bank.user.id);
+    await joinGame(GROUP_ID, game.id, bank.user.id);
     const arm = await newUser("Arm");
-    await joinGame(GROUP_ID, arm.user.id);
+    await joinGame(GROUP_ID, game.id, arm.user.id);
 
     const messages = await run(
       owner,
@@ -200,7 +200,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
   it("สั่งคิดเงินเรื่องที่ไม่ใช่ค่ารอบตี ได้บิลลอย ๆ ที่ไม่ผูกกับรอบ", async () => {
     const owner = await newUser("เชวง");
     const game = await openGame(owner.user.id);
-    await joinGame(GROUP_ID, owner.user.id);
+    await joinGame(GROUP_ID, game.id, owner.user.id);
 
     const messages = await run(
       owner,
@@ -234,9 +234,9 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
 
   it("คนที่ไม่ได้เปิดรอบสั่งคิดเงินไม่ได้ และ LLM ได้รู้เหตุผล", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner.user.id);
+    const game = await openGame(owner.user.id);
     const other = await newUser("Bank");
-    await joinGame(GROUP_ID, other.user.id);
+    await joinGame(GROUP_ID, game.id, other.user.id);
 
     const recorded: Recorded[] = [];
     await run(
@@ -255,10 +255,10 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
   it("บอกว่าโอนแล้วผ่าน LLM บันทึกให้เจ้าตัวเท่านั้น", async () => {
     const owner = await newUser("เชวง");
     const game = await openGame(owner.user.id);
-    await joinGame(GROUP_ID, owner.user.id);
+    await joinGame(GROUP_ID, game.id, owner.user.id);
 
     const other = await newUser("Bank");
-    await joinGame(GROUP_ID, other.user.id);
+    await joinGame(GROUP_ID, game.id, other.user.id);
 
     const bill = await sql<{ id: string }[]>`
       INSERT INTO bills (line_group_id, game_id, created_by, title, items, total_satang)
@@ -372,7 +372,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
   it("วนเรียก tool ไม่จบ จะตกไปที่เมนูปุ่ม", async () => {
     const user = await newUser();
 
-    const messages = await run(user, "เอาไงดี", fakeClient([call("get_open_game")]));
+    const messages = await run(user, "เอาไงดี", fakeClient([call("get_open_games")]));
 
     expect(messageTexts(messages)).toContain("ลองเลือกจากด้านล่าง");
   });
@@ -428,7 +428,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
       role: "model",
       parts: [
         {
-          functionCall: { name: "get_open_game", args: {} },
+          functionCall: { name: "get_open_games", args: {} },
           thoughtSignature: "signature-from-gemini",
         },
       ],
@@ -438,7 +438,7 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
       async generate({ systemInstruction, contents }) {
         recorded.push({ systemInstruction, contents: [...contents] });
         return recorded.length === 1
-          ? { text: "", calls: [{ name: "get_open_game", args: {} }], content: modelContent }
+          ? { text: "", calls: [{ name: "get_open_games", args: {} }], content: modelContent }
           : say("ยังไม่มีรอบเปิดอยู่นะ");
       },
     };
@@ -469,8 +469,8 @@ describe.skipIf(!canRunDbTests())("LLM agent (ฐานข้อมูลจร�
 
   it("system prompt บอกสถานะรอบที่เปิดอยู่จริง", async () => {
     const owner = await newUser();
-    await openGame(owner.user.id);
-    await joinGame(GROUP_ID, owner.user.id, sql);
+    const game = await openGame(owner.user.id);
+    await joinGame(GROUP_ID, game.id, owner.user.id, sql);
     const recorded: Recorded[] = [];
 
     await run(owner, "ตอนนี้กี่คนแล้ว", fakeClient([say("ตอนนี้ 1 คน")], recorded));

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AppError } from "@/errors/app-errors";
-import { getSql, type Sql } from "@/lib/db";
+import { getSql, type Queryable, type Sql } from "@/lib/db";
 import { DATE_PATTERN, isInThePast, TIME_PATTERN } from "@/lib/time";
 import {
   courtNameSchema,
@@ -9,8 +9,8 @@ import {
   MIN_PLAYERS,
   promptPaySchema,
 } from "@/services/game.service";
-import { countJoinedPlayers, findOpenGame, updateGame, updateGameStatus } from "@/repositories/game.repository";
-import { lockOpenGame } from "@/repositories/player.repository";
+import { countJoinedPlayers, findGameById, updateGame, updateGameStatus } from "@/repositories/game.repository";
+import { lockGame } from "@/repositories/player.repository";
 import {
   consumePendingAction,
   createPendingAction,
@@ -44,10 +44,10 @@ export type GameWithCount = {
   joinedCount: number;
 };
 
-/** หา รอบที่เปิดอยู่ พร้อมตรวจว่าคนสั่งเป็นผู้สร้าง */
-async function requireOwnedGame(lineGroupId: string, userId: string): Promise<GameWithCount> {
-  const game = await findOpenGame(lineGroupId);
-  if (!game) throw new AppError("NO_OPEN_GAME");
+/** รอบที่เลือกต้องยังเปิดอยู่ และคนสั่งต้องเป็นผู้สร้าง */
+async function requireOwnedGame(lineGroupId: string, gameId: string, userId: string): Promise<GameWithCount> {
+  const game = await findGameById(gameId);
+  if (!game || game.line_group_id !== lineGroupId || game.status !== "open") throw new AppError("NO_OPEN_GAME");
   if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
 
   return { game, joinedCount: await countJoinedPlayers(game.id) };
@@ -55,10 +55,11 @@ async function requireOwnedGame(lineGroupId: string, userId: string): Promise<Ga
 
 async function startOwnerAction(
   lineGroupId: string,
+  gameId: string,
   userId: string,
   actionType: PendingActionType,
 ): Promise<{ pending: PendingActionRow } & GameWithCount> {
-  const owned = await requireOwnedGame(lineGroupId, userId);
+  const owned = await requireOwnedGame(lineGroupId, gameId, userId);
 
   const pending = await createPendingAction({
     lineGroupId,
@@ -71,16 +72,51 @@ async function startOwnerAction(
   return { pending, ...owned };
 }
 
-export function startEditGame(lineGroupId: string, userId: string) {
-  return startOwnerAction(lineGroupId, userId, "edit_game");
+export function startEditGame(lineGroupId: string, gameId: string, userId: string) {
+  return startOwnerAction(lineGroupId, gameId, userId, "edit_game");
 }
 
-export function startCancelGame(lineGroupId: string, userId: string) {
-  return startOwnerAction(lineGroupId, userId, "cancel_game");
+export function startCancelGame(lineGroupId: string, gameId: string, userId: string) {
+  return startOwnerAction(lineGroupId, gameId, userId, "cancel_game");
 }
 
-export function startCloseGame(lineGroupId: string, userId: string) {
-  return startOwnerAction(lineGroupId, userId, "close_game");
+export function startCloseGame(lineGroupId: string, gameId: string, userId: string) {
+  return startOwnerAction(lineGroupId, gameId, userId, "close_game");
+}
+
+/**
+ * เสนอแก้รอบด้วยค่าที่รู้แล้วทั้งชุด (มาจาก LLM)
+ * ตรวจก่อนขึ้นการ์ดยืนยัน จะได้ไม่ให้กดยืนยันไปแล้วค่อยบอกว่าไม่ได้
+ */
+export async function proposeEditGame(
+  lineGroupId: string,
+  gameId: string,
+  userId: string,
+  patch: EditPatch,
+): Promise<{ pending: PendingActionRow } & GameWithCount> {
+  const owned = await requireOwnedGame(lineGroupId, gameId, userId);
+  validatePatch(owned.game, patch, owned.joinedCount);
+
+  const pending = await createPendingAction({
+    lineGroupId,
+    requestedBy: userId,
+    actionType: "edit_game",
+    gameId: owned.game.id,
+    payload: patch,
+  });
+
+  return { pending, ...owned };
+}
+
+/**
+ * รอบที่การ์ดแก้ไขใบนี้ออกไว้ให้
+ * กลุ่มเปิดได้หลายรอบ จึงต้องอ่านจาก game_id ของการ์ด ไม่ใช่ "รอบที่เปิดอยู่"
+ * รอบถูกปิดหรือยกเลิกไปแล้ว การ์ดก็ใช้ไม่ได้ (PRP multi-open-rounds §5)
+ */
+export async function gameOfPending(pending: PendingActionRow): Promise<GameRow> {
+  const game = pending.game_id ? await findGameById(pending.game_id) : null;
+  if (!game || game.status !== "open") throw new AppError("PENDING_EXPIRED");
+  return game;
 }
 
 /** ค่าที่จะเปลี่ยนต้องไม่ทำให้ที่นั่งไม่พอ และต้องไม่ย้อนอดีต (spec §15) */
@@ -122,13 +158,18 @@ export function withDerivedMaxPlayers(game: GameRow, patch: EditPatch): EditPatc
   return usesDefault ? { ...patch, max_players: patch.court_count * 8 } : patch;
 }
 
-function ensureOwner(pending: PendingActionRow, game: GameRow | null, userId: string): GameRow {
+async function lockOwnedGame(
+  pending: PendingActionRow,
+  lineGroupId: string,
+  userId: string,
+  tx: Queryable,
+): Promise<GameRow> {
   if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
-  if (!game) throw new AppError("NO_OPEN_GAME");
 
-  // การ์ดใบนี้ออกไว้กับรอบไหน ต้องทำกับรอบนั้นเท่านั้น
-  // ไม่งั้นการ์ดเก่าที่ค้างอยู่จะไปปิดหรือยกเลิกรอบใหม่ที่ผู้ใช้ไม่เคยเห็นการ์ด
-  if (pending.game_id && pending.game_id !== game.id) throw new AppError("PENDING_EXPIRED");
+  // การ์ดใบนี้ออกไว้กับรอบไหน ทำกับรอบนั้นเท่านั้น
+  // รอบนั้นถูกปิดหรือยกเลิกไปแล้ว การ์ดที่ค้างในแชทกดแล้วไม่มีผล (PRP multi-open-rounds §5)
+  const game = pending.game_id ? await lockGame(lineGroupId, pending.game_id, tx) : null;
+  if (!game) throw new AppError("PENDING_EXPIRED");
 
   if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
   return game;
@@ -145,7 +186,7 @@ export async function applyEditGame(
     const pending = await consumePendingAction(pendingId, lineGroupId, tx);
     if (!pending || pending.action_type !== "edit_game") throw new AppError("PENDING_EXPIRED");
 
-    const game = ensureOwner(pending, await lockOpenGame(lineGroupId, tx), userId);
+    const game = await lockOwnedGame(pending, lineGroupId, userId, tx);
 
     const parsed = editPatchSchema.safeParse(pending.payload);
     if (!parsed.success) throw new AppError("NO_CHANGES");
@@ -185,7 +226,7 @@ async function applyStatusChange(
     const pending = await consumePendingAction(pendingId, lineGroupId, tx);
     if (!pending || pending.action_type !== actionType) throw new AppError("PENDING_EXPIRED");
 
-    const game = ensureOwner(pending, await lockOpenGame(lineGroupId, tx), userId);
+    const game = await lockOwnedGame(pending, lineGroupId, userId, tx);
     const joinedCount = await countJoinedPlayers(game.id, tx);
 
     await updateGameStatus(game.id, status, tx);

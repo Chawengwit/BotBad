@@ -1,15 +1,17 @@
 import { AppError } from "@/errors/app-errors";
 import { getSql, type Sql } from "@/lib/db";
-import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
+import { countJoinedPlayers, findGameById } from "@/repositories/game.repository";
+import { consumePendingAction } from "@/repositories/pending-action.repository";
 import {
   cancelPlayer,
-  findAddedBy,
   findPlayerStatus,
   joinPlayer,
   listJoinedPlayers,
-  lockOpenGame,
+  lockGame,
 } from "@/repositories/player.repository";
-import type { GamePlayerRow, GameRow, UserRow } from "@/repositories/types";
+import { findUsersByIds } from "@/repositories/user.repository";
+import type { GameRow, UserRow } from "@/repositories/types";
+import type { Round } from "./round.service";
 
 export type PlayerCountResult = {
   game: GameRow;
@@ -28,16 +30,17 @@ export type ProxyResult = {
 };
 
 /**
- * ลงชื่อเข้ารอบที่เปิดอยู่
+ * ลงชื่อเข้ารอบที่เลือก
  * ทำในทรานแซกชันที่ล็อกแถวรอบไว้ กันคนลงพร้อมกันจนเกินจำนวน (spec §20)
  */
 export async function joinGame(
   lineGroupId: string,
+  gameId: string,
   userId: string,
   sql: Sql = getSql(),
 ): Promise<PlayerCountResult> {
   return sql.begin(async (tx) => {
-    const game = await lockOpenGame(lineGroupId, tx);
+    const game = await lockGame(lineGroupId, gameId, tx);
     if (!game) throw new AppError("NO_OPEN_GAME");
 
     const status = await findPlayerStatus(game.id, userId, tx);
@@ -64,12 +67,13 @@ export async function joinGame(
  */
 export async function joinPeople(
   lineGroupId: string,
+  gameId: string,
   people: UserRow[],
   addedBy: string,
   sql: Sql = getSql(),
 ): Promise<ProxyResult> {
   return sql.begin(async (tx) => {
-    const game = await lockOpenGame(lineGroupId, tx);
+    const game = await lockGame(lineGroupId, gameId, tx);
     if (!game) throw new AppError("NO_OPEN_GAME");
 
     let joinedCount = await countJoinedPlayers(game.id, tx);
@@ -100,31 +104,37 @@ export async function joinPeople(
 }
 
 /**
- * ถอนชื่อให้คนอื่น ถอนได้เฉพาะเจ้าตัวกับคนที่ลงชื่อให้ (PRP §4.3)
+ * ถอนคนนี้ออกจากรอบนี้ได้ไหม: ต้องอยู่ในรายชื่อ และคนสั่งต้องเป็นเจ้าตัวหรือคนที่ลงชื่อให้ (PRP §4.3)
  * ก๊วนเชื่อใจกันก็จริง แต่กดผิดแล้วคนหายจากรอบโดยไม่มีใครรู้ตัว
+ * กติกาเดียวใช้ทั้งตอนเลือกรอบ ตอนขึ้นการ์ดยืนยัน และตอนถอนจริง
  */
+export function leaveBlock(round: Round, person: UserRow, actorId: string): "not_joined" | "not_yours" | null {
+  const player = round.players.find((entry) => entry.user_id === person.id);
+  if (!player) return "not_joined";
+  if (person.id !== actorId && player.added_by !== actorId) return "not_yours";
+  return null;
+}
+
+/** ถอนชื่อให้คนอื่น ถอนได้เฉพาะคนที่อยู่ในรายชื่อรอบนี้ และเป็นเจ้าตัวหรือคนที่ลงชื่อให้ */
 export async function leavePeople(
   lineGroupId: string,
+  gameId: string,
   people: UserRow[],
   actorId: string,
   sql: Sql = getSql(),
 ): Promise<ProxyResult> {
   return sql.begin(async (tx) => {
-    const game = await lockOpenGame(lineGroupId, tx);
+    const game = await lockGame(lineGroupId, gameId, tx);
     if (!game) throw new AppError("NO_OPEN_GAME");
 
+    // อ่านรายชื่อหลังล็อกแล้ว สิทธิ์จะได้เช็กจากรายชื่อล่าสุดเสมอ
+    const round: Round = { game, players: await listJoinedPlayers(game.id, tx) };
     const result: ProxyResult = { game, joinedCount: 0, people: [], skipped: [] };
 
     for (const person of people) {
-      const status = await findPlayerStatus(game.id, person.id, tx);
-      if (status !== "joined") {
-        result.skipped.push({ user: person, reason: "not_joined" });
-        continue;
-      }
-
-      const addedBy = await findAddedBy(game.id, person.id, tx);
-      if (person.id !== actorId && addedBy !== actorId) {
-        result.skipped.push({ user: person, reason: "not_yours" });
+      const block = leaveBlock(round, person, actorId);
+      if (block) {
+        result.skipped.push({ user: person, reason: block });
         continue;
       }
 
@@ -137,14 +147,60 @@ export async function leavePeople(
   }) as Promise<ProxyResult>;
 }
 
-/** ถอนชื่อออกจากรอบที่เปิดอยู่ */
+export type LeavePlan = {
+  game: GameRow;
+  /** คนที่ถอนได้จริงตอนนี้ */
+  removable: UserRow[];
+  skipped: ProxyResult["skipped"];
+};
+
+/**
+ * เช็กก่อนว่าใครถอนได้จริง ยังไม่แตะรายชื่อ
+ * ใช้ก่อนขึ้นการ์ดยืนยัน จะได้ไม่ขึ้นปุ่มให้คนที่ไม่อยู่ในรายชื่อหรือถอนไม่ได้อยู่แล้ว
+ */
+export function planLeave(round: Round, people: UserRow[], actorId: string): LeavePlan {
+  const plan: LeavePlan = { game: round.game, removable: [], skipped: [] };
+  for (const person of people) {
+    const block = leaveBlock(round, person, actorId);
+    if (block) {
+      plan.skipped.push({ user: person, reason: block });
+      continue;
+    }
+    plan.removable.push(person);
+  }
+  return plan;
+}
+
+/**
+ * กดยืนยันบนการ์ดถอนชื่อ ใช้ปุ่มทิ้งก่อนถอน กดซ้ำหรือกดพร้อมกันจะถอนได้ครั้งเดียว
+ * ระหว่างรอกด รายชื่ออาจเปลี่ยนไปแล้ว จึงเช็กสิทธิ์ใหม่ทั้งหมดตอนถอนจริง
+ */
+export async function confirmLeavePlayers(
+  pendingId: string,
+  lineGroupId: string,
+  userId: string,
+): Promise<ProxyResult> {
+  const pending = await consumePendingAction(pendingId, lineGroupId, getSql());
+  if (!pending || pending.action_type !== "leave_players") throw new AppError("PENDING_EXPIRED");
+  if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
+
+  // การ์ดใบนี้ออกไว้กับรอบไหน ถอนจากรอบนั้นเท่านั้น รอบถูกปิดหรือยกเลิกไปแล้วกดแล้วไม่มีผล
+  const game = pending.game_id ? await findGameById(pending.game_id) : null;
+  if (!game || game.status !== "open") throw new AppError("PENDING_EXPIRED");
+
+  const people = await findUsersByIds((pending.payload.user_ids ?? []) as string[]);
+  return leavePeople(lineGroupId, game.id, people, userId);
+}
+
+/** ถอนชื่อออกจากรอบที่เลือก */
 export async function leaveGame(
   lineGroupId: string,
+  gameId: string,
   userId: string,
   sql: Sql = getSql(),
 ): Promise<PlayerCountResult> {
   return sql.begin(async (tx) => {
-    const game = await lockOpenGame(lineGroupId, tx);
+    const game = await lockGame(lineGroupId, gameId, tx);
     if (!game) throw new AppError("NO_OPEN_GAME");
 
     const status = await findPlayerStatus(game.id, userId, tx);
@@ -154,19 +210,4 @@ export async function leaveGame(
     const joinedCount = await countJoinedPlayers(game.id, tx);
     return { game, joinedCount, changeCount };
   }) as Promise<PlayerCountResult>;
-}
-
-export type GameWithPlayers = {
-  game: GameRow;
-  players: GamePlayerRow[];
-};
-
-export async function listPlayers(
-  lineGroupId: string,
-  sql: Sql = getSql(),
-): Promise<GameWithPlayers> {
-  const game = await findOpenGame(lineGroupId, sql);
-  if (!game) throw new AppError("NO_OPEN_GAME");
-
-  return { game, players: await listJoinedPlayers(game.id, sql) };
 }

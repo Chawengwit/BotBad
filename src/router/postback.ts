@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AppError } from "@/errors/app-errors";
+import { getSql } from "@/lib/db";
 import type { LineMessage } from "@/lib/line";
 import { addDays, DATE_PATTERN, TIME_PATTERN, todayInBangkok } from "@/lib/time";
 import {
@@ -11,19 +12,31 @@ import {
   gameCancelled,
   gameCard,
   gameClosed,
+  leftForNotice,
   NAG_AFTER_CHANGES,
   nagEdits,
+  roundLabel,
 } from "@/line/messages";
-import { findLatestPromptPay, findLatestVenue, findOpenGame } from "@/repositories/game.repository";
+import { findLatestPromptPay, findLatestVenue } from "@/repositories/game.repository";
 import {
+  consumePendingAction,
   expirePendingAction,
   findUsablePendingAction,
   updatePendingPayload,
   type PendingActionRow,
+  type PendingPayload,
 } from "@/repositories/pending-action.repository";
 import { clearSession } from "@/repositories/session.repository";
 import type { LineUserRow } from "@/repositories/types";
-import { applyCancelGame, applyCloseGame, applyEditGame } from "@/services/game-admin.service";
+import {
+  applyCancelGame,
+  applyCloseGame,
+  applyEditGame,
+  editPatchSchema,
+  gameOfPending,
+} from "@/services/game-admin.service";
+import { isRoundIntent } from "@/services/round.service";
+import { confirmLeavePlayers } from "@/services/player.service";
 import {
   confirmCreateGame as confirmCreateGameService,
   MAX_PLAYERS,
@@ -42,10 +55,20 @@ import {
   doEditBillAction,
   doMarkPayment,
   doRemoveBillItem,
+  doStartGameBill,
   doUnpaidList,
   showBillEdit,
 } from "./bill-actions";
-import { doJoin, doLeave, doList } from "./game-actions";
+import {
+  doCancel,
+  doClose,
+  doEdit,
+  doJoin,
+  doJoinFor,
+  doLeave,
+  doLeaveFor,
+  doList,
+} from "./game-actions";
 import { advanceBillWizard, advanceCreateWizard, advanceEditWizard, questionFor } from "./wizard";
 
 /** ข้อมูลที่แนบมากับปุ่ม เป็น query string และต้อง validate ทุกครั้ง (spec §18) */
@@ -77,12 +100,14 @@ const postbackSchema = z.discriminatedUnion("action", [
       "edit_bill",
       "edit",
       "edit_remove",
+      // การ์ด "รอบไหน?" value = id ของรอบที่เลือก (PRP multi-open-rounds §4.3)
+      "game",
     ]),
     value: z.string().min(1).max(40),
   }),
   z.object({ action: z.literal("confirm"), pending_id: z.uuid() }),
   z.object({ action: z.literal("reject"), pending_id: z.uuid() }),
-  // ปุ่มบนการ์ดรอบตี ทำกับรอบที่เปิดอยู่ของกลุ่มนั้น ไม่ต้องอ้างรอบ
+  // ปุ่มเก่าบนการ์ดรอบตี ไม่มี id ของรอบ ทำเหมือนพิมพ์คำสั่ง (PRP multi-open-rounds §4.5)
   z.object({ action: z.literal("join") }),
   z.object({ action: z.literal("leave") }),
   z.object({ action: z.literal("list") }),
@@ -172,8 +197,7 @@ async function handleConfirm(
   lineGroupId: string,
   user: LineUserRow,
 ): Promise<LineMessage[]> {
-  const userId = user.id;
-  const messages = await runConfirm(pending, lineGroupId, userId);
+  const messages = await runConfirm(pending, lineGroupId, user);
 
   // จบเรื่องแล้ว ไม่ต้องให้ LLM จำบทสนทนาเดิมไปเสนอซ้ำ (LLM Design §10)
   await clearSession(lineGroupId, user.line_user_id).catch(() => {});
@@ -183,8 +207,10 @@ async function handleConfirm(
 async function runConfirm(
   pending: PendingActionRow,
   lineGroupId: string,
-  userId: string,
+  user: LineUserRow,
 ): Promise<LineMessage[]> {
+  const userId = user.id;
+
   switch (pending.action_type) {
     case "create_game": {
       const game = await confirmCreateGameService(pending.id, lineGroupId, userId);
@@ -218,6 +244,56 @@ async function runConfirm(
       const { bill, items, shares } = await confirmEditBill(pending.id, lineGroupId, userId);
       return [billCard(bill, items, shares, { icon: "pen", text: "แก้บิลแล้ว" })];
     }
+    case "leave_players": {
+      const result = await confirmLeavePlayers(pending.id, lineGroupId, userId);
+      const round = pending.payload.labeled === true ? roundLabel(result.game) : undefined;
+      return [leftForNotice(user.display_name, result, [], { round })];
+    }
+    case "choose_game":
+      // การ์ด "รอบไหน?" ไม่มีปุ่มยืนยัน
+      throw new AppError("PENDING_EXPIRED");
+  }
+}
+
+/**
+ * กดเลือกรอบบนการ์ด "รอบไหน?" (PRP multi-open-rounds §4.3)
+ * ทำคำสั่งเดิมซ้ำกับรอบที่เลือก ทุกอย่างเช็กใหม่ตอนนี้ ระหว่างรอกดรอบอาจเต็ม ถูกปิด หรือคนถูกถอนไปแล้ว
+ * ถอนคนอื่นที่สั่งเป็นประโยค การกดเลือกรอบนับเป็นการยืนยันไปในตัว
+ */
+async function doChooseRound(
+  pending: PendingActionRow,
+  gameId: string,
+  user: LineUserRow,
+): Promise<LineMessage[]> {
+  const intent = pending.payload.intent;
+  if (!isRoundIntent(intent)) throw new AppError("INTERNAL_ERROR");
+
+  // ใช้การ์ดทิ้งก่อน กดสองปุ่มพร้อมกันจะได้ทำครั้งเดียว
+  const used = await consumePendingAction(pending.id, pending.line_group_id, getSql());
+  if (!used) throw new AppError("PENDING_EXPIRED");
+
+  const lineGroupId = pending.line_group_id;
+  const chosen = { gameId };
+  const names = (pending.payload.names ?? []) as string[];
+  const patch = pending.payload.patch as PendingPayload | undefined;
+
+  switch (intent) {
+    case "join":
+      return doJoin(lineGroupId, user, chosen);
+    case "join_for":
+      return doJoinFor(lineGroupId, user, names, chosen);
+    case "leave":
+      return doLeave(lineGroupId, user, chosen);
+    case "leave_for":
+      return doLeaveFor(lineGroupId, user, names, chosen);
+    case "edit":
+      return doEdit(lineGroupId, user, chosen, patch ? editPatchSchema.parse(patch) : undefined);
+    case "cancel":
+      return doCancel(lineGroupId, user, chosen);
+    case "close":
+      return doClose(lineGroupId, user, chosen);
+    case "bill":
+      return doStartGameBill(lineGroupId, user, chosen, patch ?? {});
   }
 }
 
@@ -230,8 +306,8 @@ async function handleEditFieldChoice(
   const field = EDIT_FIELD_QUESTIONS[choice as keyof typeof EDIT_FIELD_QUESTIONS];
   if (!field) throw new AppError("INTERNAL_ERROR");
 
-  const game = await findOpenGame(lineGroupId);
-  if (!game) throw new AppError("NO_OPEN_GAME");
+  // แก้รอบที่การ์ดนี้ออกไว้ให้ ถ้ารอบนั้นถูกปิดไปแล้วการ์ดก็ใช้ไม่ได้
+  const game = await gameOfPending(pending);
 
   // ช่องที่ต้องพิมพ์ตอบ ต้องจำไว้ว่ากำลังรอคำตอบอะไรอยู่
   const AWAITING_BY_FIELD = {
@@ -331,6 +407,11 @@ export async function handlePostback(
     return handleEditFieldChoice(pending, input.lineGroupId, parsed.value);
   }
 
+  if (parsed.step === "game") {
+    if (pending.action_type !== "choose_game") throw new AppError("INTERNAL_ERROR");
+    return doChooseRound(pending, parsed.value, input.user);
+  }
+
   if (isBillStep(parsed.step)) {
     if (pending.action_type !== "create_bill") throw new AppError("INTERNAL_ERROR");
     return handleBillStep(pending, parsed.step, parsed.value);
@@ -365,7 +446,7 @@ export async function handlePostback(
         await expirePendingAction(pending.id, input.lineGroupId);
         return [actionRejected(pending.action_type)];
       }
-      return advanceEditWizard(pending.id, input.lineGroupId, "promptpay", lastUsed);
+      return advanceEditWizard(pending, "promptpay", lastUsed);
     }
 
     return advanceCreateWizard(pending, {
@@ -411,7 +492,7 @@ export async function handlePostback(
     // เมนูแก้ไขถามทีละช่อง จึงได้ค่ากลับมาช่องเดียวเสมอ
     const [field, value] = Object.entries(patch)[0] ?? [];
     if (field === undefined || value === undefined) throw new AppError("INTERNAL_ERROR");
-    return advanceEditWizard(pending.id, input.lineGroupId, field, value);
+    return advanceEditWizard(pending, field, value);
   }
 
   return advanceCreateWizard(pending, patch);

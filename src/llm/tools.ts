@@ -52,6 +52,23 @@ const gameFields = {
   },
 };
 
+/**
+ * รอบที่หมายถึง กลุ่มเปิดได้หลายรอบพร้อมกัน (PRP multi-open-rounds §6)
+ * ไม่ใช้ชื่อ play_date / start_time เพราะ propose_edit_game ใช้ชื่อนั้นเป็นค่าใหม่ของรอบอยู่แล้ว
+ */
+const roundFields = {
+  round_date: {
+    type: Type.STRING,
+    description:
+      'วันของรอบที่หมายถึง รูปแบบ YYYY-MM-DD ใส่เฉพาะเมื่อผู้ใช้พูดถึงวันของรอบ เช่น "รอบวันเสาร์" ' +
+      "ไม่ได้พูดถึงไม่ต้องส่ง ระบบเลือกรอบหรือถามผู้ใช้เอง",
+  },
+  round_time: {
+    type: Type.STRING,
+    description: "เวลาเริ่มของรอบที่หมายถึง รูปแบบ HH:mm ใส่เฉพาะเมื่อผู้ใช้พูดถึงเวลาของรอบ ใช้แยกสองรอบที่อยู่วันเดียวกัน",
+  },
+};
+
 const billTitleField = {
   bill_title: {
     type: Type.STRING,
@@ -131,27 +148,30 @@ const billFields = {
 
 export const toolDeclarations: FunctionDeclaration[] = [
   {
-    name: "get_open_game",
+    name: "get_open_games",
     description:
-      "ดูรอบตีที่เปิดอยู่ของกลุ่มนี้ ได้วัน เวลา คอร์ท จำนวนคนที่ลงชื่อ และผู้สร้าง ใช้เมื่อผู้ใช้ถามว่ามีรอบไหม เต็มหรือยัง กี่โมง ตีที่ไหน",
+      "ดูทุกรอบตีที่เปิดอยู่ของกลุ่มนี้ ได้วัน เวลา คอร์ท จำนวนคนที่ลงชื่อ และผู้สร้างของแต่ละรอบ " +
+      "ใช้เมื่อผู้ใช้ถามว่ามีรอบไหม เต็มหรือยัง กี่โมง ตีที่ไหน",
   },
   {
     name: "list_players",
-    description: "ดูรายชื่อผู้เล่นที่ลงชื่อในรอบที่เปิดอยู่ เรียงตามลำดับที่ลงชื่อ",
+    description:
+      "ดูรายชื่อผู้เล่นที่ลงชื่อ เรียงตามลำดับที่ลงชื่อ ไม่ระบุรอบได้รายชื่อทุกรอบที่เปิดอยู่",
+    parameters: { type: Type.OBJECT, properties: roundFields },
   },
   {
     name: "join_game",
     description:
       "ลงชื่อเข้ารอบที่เปิดอยู่ ไม่ส่ง names มาคือลงชื่อ 'ผู้ใช้ที่พิมพ์ข้อความนี้' " +
       "ถ้าผู้ใช้เอ่ยชื่อคนอื่นหรือบอกว่าพาเพื่อนมา ให้ส่งชื่อเหล่านั้นใน names",
-    parameters: { type: Type.OBJECT, properties: peopleFields },
+    parameters: { type: Type.OBJECT, properties: { ...peopleFields, ...roundFields } },
   },
   {
     name: "leave_game",
     description:
       "ถอนชื่อออกจากรอบที่เปิดอยู่ ไม่ส่ง names มาคือถอน 'ผู้ใช้ที่พิมพ์ข้อความนี้' " +
-      "ถ้าผู้ใช้บอกให้ถอนคนอื่น ให้ส่งชื่อใน names ระบบจะตรวจสิทธิ์เองว่าถอนได้ไหม",
-    parameters: { type: Type.OBJECT, properties: peopleFields },
+      "ถ้าผู้ใช้บอกให้ถอนคนอื่น ให้ส่งชื่อใน names ระบบจะเช็กรายชื่อและสิทธิ์เอง ถอนคนอื่นต้องกดยืนยันก่อน",
+    parameters: { type: Type.OBJECT, properties: { ...peopleFields, ...roundFields } },
   },
   {
     name: "propose_create_game",
@@ -162,8 +182,9 @@ export const toolDeclarations: FunctionDeclaration[] = [
   {
     name: "propose_edit_game",
     description:
-      "เสนอแก้ไขรอบที่เปิดอยู่ ยังไม่แก้จริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ส่งเฉพาะค่าที่ต้องการเปลี่ยน ใช้ได้เฉพาะคนที่เปิดรอบ",
-    parameters: { type: Type.OBJECT, properties: gameFields },
+      "เสนอแก้ไขรอบที่เปิดอยู่ ยังไม่แก้จริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ส่งเฉพาะค่าที่ต้องการเปลี่ยน ใช้ได้เฉพาะคนที่เปิดรอบ " +
+      "play_date / start_time คือค่าใหม่ ส่วนรอบที่จะแก้ระบุด้วย round_date / round_time",
+    parameters: { type: Type.OBJECT, properties: { ...gameFields, ...roundFields } },
   },
   {
     name: "get_bill",
@@ -190,6 +211,7 @@ export const toolDeclarations: FunctionDeclaration[] = [
           type: Type.STRING,
           description: "ชื่อบิลใหม่ ใส่เฉพาะ kind = new และผู้ใช้ตั้งชื่อมาเอง",
         },
+        ...roundFields,
       },
     },
   },
@@ -210,6 +232,7 @@ export const toolDeclarations: FunctionDeclaration[] = [
           type: Type.STRING,
           description: "เลขพร้อมเพย์ที่ให้โอน ใส่เฉพาะเมื่อผู้ใช้บอกเลขมาในข้อความ",
         },
+        ...roundFields,
       },
     },
   },
@@ -236,50 +259,61 @@ export const toolDeclarations: FunctionDeclaration[] = [
     name: "propose_cancel_game",
     description:
       "เสนอยกเลิกรอบที่เปิดอยู่ (ไม่ได้เล่น) ยังไม่ยกเลิกจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ใช้ได้เฉพาะคนที่เปิดรอบ",
+    parameters: { type: Type.OBJECT, properties: roundFields },
   },
   {
     name: "propose_close_game",
     description:
-      "เสนอปิดรอบที่เล่นจบแล้ว เพื่อให้กลุ่มเปิดรอบใหม่ได้ ยังไม่ปิดจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ใช้ได้เฉพาะคนที่เปิดรอบ",
+      "เสนอปิดรอบที่เล่นจบแล้ว ยังไม่ปิดจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ใช้ได้เฉพาะคนที่เปิดรอบ " +
+      "รอบที่เลยวันเล่นแล้วระบบปิดให้เองทุกเช้า",
+    parameters: { type: Type.OBJECT, properties: roundFields },
   },
 ];
 
 const noArgs = z.object({}).strict();
 
-const peopleArgs = z
-  .object({ names: z.array(z.string().trim().min(1).max(MAX_NAME_LENGTH)).max(MAX_NAMES_PER_COMMAND) })
-  .partial()
-  .strict();
+const roundArgs = {
+  round_date: z.string().regex(DATE_PATTERN),
+  round_time: z.string().regex(TIME_PATTERN),
+};
 
-const gameArgs = z
+const roundOnlyArgs = z.object(roundArgs).partial().strict();
+
+const peopleArgs = z
   .object({
-    court_count: z.number().int().min(1).max(4),
-    max_players: z.number().int().min(MIN_PLAYERS).max(MAX_PLAYERS),
-    play_date: z.string().regex(DATE_PATTERN),
-    start_time: z.string().regex(TIME_PATTERN),
-    duration_minutes: z.number().int().positive().multipleOf(60),
-    court_name: courtNameSchema,
-    location_url: locationUrlSchema,
-    promptpay: promptPaySchema,
+    names: z.array(z.string().trim().min(1).max(MAX_NAME_LENGTH)).max(MAX_NAMES_PER_COMMAND),
+    ...roundArgs,
   })
   .partial()
   .strict();
 
+const gameShape = {
+  court_count: z.number().int().min(1).max(4),
+  max_players: z.number().int().min(MIN_PLAYERS).max(MAX_PLAYERS),
+  play_date: z.string().regex(DATE_PATTERN),
+  start_time: z.string().regex(TIME_PATTERN),
+  duration_minutes: z.number().int().positive().multipleOf(60),
+  court_name: courtNameSchema,
+  location_url: locationUrlSchema,
+  promptpay: promptPaySchema,
+};
+
 /** ตรวจ arguments ที่ LLM ส่งมาทุกครั้ง (LLM Design §6) */
 export const toolSchemas = {
-  get_open_game: noArgs,
-  list_players: noArgs,
+  get_open_games: noArgs,
+  list_players: roundOnlyArgs,
   join_game: peopleArgs,
   leave_game: peopleArgs,
-  propose_create_game: gameArgs,
-  propose_edit_game: gameArgs,
-  propose_cancel_game: noArgs,
-  propose_close_game: noArgs,
+  propose_create_game: z.object(gameShape).partial().strict(),
+  propose_edit_game: z.object({ ...gameShape, ...roundArgs }).partial().strict(),
+  propose_cancel_game: roundOnlyArgs,
+  propose_close_game: roundOnlyArgs,
   get_bill: z.object({ bill_title: z.string().trim().max(60) }).partial().strict(),
   start_bill: z
     .object({
       kind: z.enum(["game", "new", "edit"]),
       title: z.string().trim().min(1).max(60),
+      ...roundArgs,
     })
     .partial()
     .strict(),
@@ -298,6 +332,7 @@ export const toolSchemas = {
           }),
         )
         .max(MAX_OTHER_ITEMS + 2),
+      ...roundArgs,
     })
     .partial()
     .strict(),

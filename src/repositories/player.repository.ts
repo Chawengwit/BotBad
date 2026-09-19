@@ -4,9 +4,13 @@ import type { GamePlayerRow, GameRow } from "./types";
 /**
  * ล็อกแถวรอบตีไว้ก่อนนับจำนวนคน
  * จำเป็นเพราะหลายคนกดลงชื่อพร้อมกันได้ (spec §20)
+ *
+ * ล็อกด้วย id ของรอบที่เลือกแล้ว เพราะกลุ่มเปิดได้หลายรอบ (PRP multi-open-rounds)
+ * คืน null เมื่อรอบนั้นไม่ได้เปิดอยู่แล้ว เช่น ถูกปิดหรือยกเลิกระหว่างรอกดปุ่ม
  */
-export async function lockOpenGame(
+export async function lockGame(
   lineGroupId: string,
+  gameId: string,
   sql: Queryable,
 ): Promise<GameRow | null> {
   const rows = await sql<GameRow[]>`
@@ -24,7 +28,7 @@ export async function lockOpenGame(
            promptpay,
            edit_count
     FROM games
-    WHERE line_group_id = ${lineGroupId} AND status = 'open'
+    WHERE id = ${gameId} AND line_group_id = ${lineGroupId} AND status = 'open'
     FOR UPDATE
   `;
   return rows[0] ?? null;
@@ -106,6 +110,22 @@ export async function listJoinedPlayers(
     FROM game_players gp
     JOIN users u ON u.id = gp.user_id
     WHERE gp.game_id = ${gameId} AND gp.status = 'joined'
+    ORDER BY gp.joined_at, gp.id
+  `;
+}
+
+/** รายชื่อของหลายรอบในคำสั่งเดียว ใช้ตัดสินว่าคำสั่งนี้ทำกับรอบไหนได้ ไม่ต้องยิงทีละรอบ */
+export async function listJoinedPlayersOf(
+  gameIds: string[],
+  sql: Queryable = getSql(),
+): Promise<GamePlayerRow[]> {
+  if (gameIds.length === 0) return [];
+
+  return sql<GamePlayerRow[]>`
+    SELECT gp.id, gp.game_id, gp.user_id, gp.status, gp.added_by, u.display_name
+    FROM game_players gp
+    JOIN users u ON u.id = gp.user_id
+    WHERE gp.game_id = ANY(${gameIds}::bigint[]) AND gp.status = 'joined'
     ORDER BY gp.joined_at, gp.id
   `;
 }

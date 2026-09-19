@@ -32,6 +32,7 @@ import {
 } from "@/services/bill.service";
 import type { BillItemRow, BillRow, BillShareRow } from "@/repositories/types";
 import type { EditPatch } from "@/services/game-admin.service";
+import type { RoundIntent } from "@/services/round.service";
 import type { GameRow } from "@/repositories/types";
 
 export const WIZARD_TIME_CHOICES = ["18:00", "19:00", "20:00"] as const;
@@ -294,6 +295,18 @@ export function askAgain(message: string): TextMessage {
   return text(message);
 }
 
+function rejectAction(pendingId: string, label: string): Button {
+  return {
+    label,
+    icon: label === "กลับ" ? "arrow-left" : "xmark",
+    action: {
+      type: "postback",
+      label,
+      data: new URLSearchParams({ action: "reject", pending_id: pendingId }).toString(),
+    },
+  };
+}
+
 function confirmActions(pendingId: string, confirmLabel: string, rejectLabel = "ยกเลิก"): Button[] {
   return [
     {
@@ -306,15 +319,7 @@ function confirmActions(pendingId: string, confirmLabel: string, rejectLabel = "
         data: new URLSearchParams({ action: "confirm", pending_id: pendingId }).toString(),
       },
     },
-    {
-      label: rejectLabel,
-      icon: rejectLabel === "กลับ" ? "arrow-left" : "xmark",
-      action: {
-        type: "postback",
-        label: rejectLabel,
-        data: new URLSearchParams({ action: "reject", pending_id: pendingId }).toString(),
-      },
-    },
+    rejectAction(pendingId, rejectLabel),
   ];
 }
 
@@ -345,6 +350,62 @@ export function confirmCreateGame(pendingId: string, draft: GameDraft): FlexMess
       footer: footerButtons(confirmActions(pendingId, "เปิดตี")),
     }),
   );
+}
+
+/**
+ * "พุธ 24 ก.ย. 19:00" บอกว่ารอบไหนเมื่อกลุ่มเปิดอยู่หลายรอบ (PRP multi-open-rounds §4.4)
+ * ใส่เวลาด้วย เพราะวันเดียวกันเปิดได้หลายรอบ
+ */
+export function roundLabel(game: GameRow): string {
+  return `${formatThaiDate(game.play_date)} ${game.start_time}`;
+}
+
+/** ต่อท้ายผลลัพธ์ เฉพาะตอนต้องบอกว่ารอบไหน */
+function inRound(round: string | undefined): string {
+  return round ? ` (${round})` : "";
+}
+
+const ROUND_QUESTIONS: Record<RoundIntent, string> = {
+  join: "ลงชื่อรอบไหน?",
+  join_for: "ลงชื่อรอบไหน?",
+  leave: "ถอนจากรอบไหน?",
+  leave_for: "ถอนจากรอบไหน?",
+  edit: "แก้รอบไหน?",
+  cancel: "ยกเลิกรอบไหน?",
+  close: "ปิดรอบไหน?",
+  bill: "คิดค่ารอบไหน?",
+};
+
+/**
+ * การ์ด "รอบไหน?" ปุ่มละรอบ เรียงตามวันเล่น (PRP multi-open-rounds §4.3)
+ * ป้ายมีชื่อคอร์ทซึ่งยาวได้ จึงเรียงแถวละปุ่ม
+ */
+export function whichRound(
+  pendingId: string,
+  intent: RoundIntent,
+  games: GameRow[],
+  names: string[] = [],
+): FlexMessage {
+  return questionCard(
+    { icon: "calendar-days", text: ROUND_QUESTIONS[intent] },
+    names.length > 0 ? [infoRow("users", names.join(", "))] : [],
+    [
+      ...games.map((game) =>
+        choice(
+          fitLabel(`${roundLabel(game)} · ${game.court_name ?? "BADMINTON"}`),
+          wizardData(pendingId, "game", game.id),
+          "calendar-days",
+        ),
+      ),
+      rejectAction(pendingId, "ยกเลิก"),
+    ],
+    1,
+  );
+}
+
+/** ข้อความนี้คือการถามว่ารอบไหน ใช้ตัดสินว่าต้องจำคำถามไว้ และห้ามให้ LLM พูดทับ */
+export function isRoundQuestion(message: LineMessage): message is FlexMessage {
+  return message.type === "flex" && (Object.values(ROUND_QUESTIONS) as string[]).includes(message.altText);
 }
 
 /** บรรทัดข้อมูลรอบตีที่ใช้ทั้งการ์ดรอบและการ์ดรายชื่อ */
@@ -388,8 +449,9 @@ export function joinedNotice(
   displayName: string,
   joinedCount: number,
   maxPlayers: number,
+  round?: string,
 ): TextMessage {
-  return text(`✅ ${displayName} ลงชื่อแล้ว\n👥 ${joinedCount}/${maxPlayers} คน`);
+  return text(`✅ ${displayName} ลงชื่อแล้ว${inRound(round)}\n👥 ${joinedCount}/${maxPlayers} คน`);
 }
 
 /**
@@ -404,6 +466,7 @@ export function joinedForNotice(
     skipped: { user: { display_name: string }; reason: string }[];
   },
   newGuests: string[] = [],
+  round?: string,
 ): TextMessage {
   const names = result.people.map((person) => person.display_name);
   const already = result.skipped
@@ -413,7 +476,7 @@ export function joinedForNotice(
   return text(
     [
       names.length > 0
-        ? `✅ ${actorName} ลงชื่อให้ ${names.join(", ")}`
+        ? `✅ ${actorName} ลงชื่อให้ ${names.join(", ")}${inRound(round)}`
         : `ℹ️ ไม่มีใครถูกลงชื่อเพิ่ม`,
       ...(newGuests.length > 0 ? [`🆕 เพิ่มแขกใหม่: ${newGuests.join(", ")}`] : []),
       ...(already.length > 0 ? [`ℹ️ ${already.join(", ")} ลงชื่อไว้อยู่แล้ว`] : []),
@@ -422,35 +485,75 @@ export function joinedForNotice(
   );
 }
 
+type LeaveSkipped = { user: { display_name: string }; reason: string }[];
+
+/**
+ * คนที่ถอนไม่ได้ พร้อมเหตุผล
+ * จะไม่รู้จักชื่อหรือรู้จักแต่ไม่ได้ลงชื่อ สำหรับคนสั่งก็คือไม่อยู่ในรายชื่อรอบนี้เหมือนกัน
+ * allRounds = ดูมาทุกรอบที่เปิดอยู่แล้วไม่เจอ (PRP multi-open-rounds §4.2)
+ */
+function leaveNotes(skipped: LeaveSkipped, unknownNames: string[], allRounds = false): string[] {
+  const notYours = skipped
+    .filter((entry) => entry.reason === "not_yours")
+    .map((entry) => entry.user.display_name);
+  const notInList = [
+    ...skipped.filter((entry) => entry.reason === "not_joined").map((entry) => entry.user.display_name),
+    ...unknownNames,
+  ];
+
+  return [
+    ...(notYours.length > 0 ? [`⛔ ${notYours.join(", ")} ถอนได้เฉพาะเจ้าตัวกับคนที่ลงชื่อให้`] : []),
+    ...(notInList.length > 0
+      ? [`ℹ️ ${notInList.join(", ")} ไม่ได้อยู่ในรายชื่อ${allRounds ? "รอบไหนเลย" : "รอบนี้"}`]
+      : []),
+  ];
+}
+
 export function leftForNotice(
   actorName: string,
   result: {
     joinedCount: number;
     people: { display_name: string }[];
-    skipped: { user: { display_name: string }; reason: string }[];
+    skipped: LeaveSkipped;
   },
   unknownNames: string[] = [],
+  options: { round?: string; allRounds?: boolean } = {},
 ): TextMessage {
   const names = result.people.map((person) => person.display_name);
-  const notYours = result.skipped
-    .filter((entry) => entry.reason === "not_yours")
-    .map((entry) => entry.user.display_name);
-  const notJoined = result.skipped
-    .filter((entry) => entry.reason === "not_joined")
-    .map((entry) => entry.user.display_name);
+  const lines = [
+    ...(names.length > 0 ? [`👋 ${actorName} ถอนชื่อให้ ${names.join(", ")}${inRound(options.round)}`] : []),
+    ...leaveNotes(result.skipped, unknownNames, options.allRounds),
+    ...(names.length > 0 ? [`👥 ${result.joinedCount} คน`] : []),
+  ];
 
-  return text(
-    [
-      names.length > 0
-        ? `👋 ${actorName} ถอนชื่อให้ ${names.join(", ")}`
-        : "ℹ️ ไม่มีใครถูกถอนชื่อ",
-      ...(notYours.length > 0
-        ? [`⛔ ${notYours.join(", ")} ถอนได้เฉพาะเจ้าตัวกับคนที่ลงชื่อให้`]
-        : []),
-      ...(notJoined.length > 0 ? [`ℹ️ ${notJoined.join(", ")} ไม่ได้ลงชื่อไว้`] : []),
-      ...(unknownNames.length > 0 ? [`❓ ไม่รู้จัก ${unknownNames.join(", ")}`] : []),
-      `👥 ${result.joinedCount} คน`,
-    ].join("\n"),
+  return text(lines.length > 0 ? lines.join("\n") : "ℹ️ ไม่มีใครถูกถอนชื่อ");
+}
+
+/**
+ * สั่งเป็นประโยคให้ถอนชื่อคนอื่น ต้องกดยืนยันก่อน กันมุกในแชทไปถอนคนจริงออก
+ * ขึ้นเฉพาะคนที่ถอนได้จริง คนที่ถอนไม่ได้อยู่แล้วบอกไว้ใต้รายชื่อเลย ไม่ต้องรอกด
+ */
+export function confirmLeavePlayers(
+  pendingId: string,
+  removable: { display_name: string }[],
+  skipped: LeaveSkipped,
+  unknownNames: string[],
+  round?: string,
+): FlexMessage {
+  return flexMessage(
+    "ถอนชื่อออกจากรอบ?",
+    bubble({
+      header: header({ icon: "user-minus", text: "ถอนชื่อออกจากรอบ?" }, COLOR.warn),
+      body: vbox(
+        [
+          title(removable.map((person) => person.display_name).join(", ")),
+          ...(round ? [infoRow("calendar-days", round)] : []),
+          ...leaveNotes(skipped, unknownNames).map((line) => note(line)),
+        ],
+        { paddingAll: "20px", spacing: "sm" },
+      ),
+      footer: footerButtons(confirmActions(pendingId, "ถอนชื่อ")),
+    }),
   );
 }
 
@@ -458,8 +561,9 @@ export function leftNotice(
   displayName: string,
   joinedCount: number,
   maxPlayers: number,
+  round?: string,
 ): TextMessage {
-  return text(`👋 ${displayName} ถอนชื่อแล้ว\n👥 ${joinedCount}/${maxPlayers} คน`);
+  return text(`👋 ${displayName} ถอนชื่อแล้ว${inRound(round)}\n👥 ${joinedCount}/${maxPlayers} คน`);
 }
 
 export function playerList(game: GameRow, players: { display_name: string }[]): FlexMessage {
@@ -671,6 +775,10 @@ export function actionRejected(actionType: PendingActionType): TextMessage {
       return text("ได้ครับพี่ บิลเดิมยังอยู่");
     case "edit_bill":
       return text("ได้ครับพี่ บิลยังเหมือนเดิม");
+    case "leave_players":
+      return text("ได้ครับพี่ รายชื่อยังเหมือนเดิม");
+    case "choose_game":
+      return text("ได้ครับพี่ ยังไม่ได้ทำอะไรนะ");
     default:
       return text("ได้ครับพี่ รอบตียังเปิดอยู่เหมือนเดิม");
   }
@@ -941,15 +1049,19 @@ export function unpaidList(bill: BillRow, shares: BillShareRow[]): FlexMessage {
   );
 }
 
-/** รายชื่อบิลที่เปิดอยู่ ใช้ตอนผู้ใช้ไม่ได้ระบุว่าหมายถึงใบไหน */
-export function billChoices(titles: string[]): TextMessage {
+/**
+ * รายชื่อบิลที่เปิดอยู่ ใช้ตอนผู้ใช้ไม่ได้ระบุว่าหมายถึงใบไหน
+ * ตัวอย่างเป็นคำสั่งเดิมของคนพิมพ์ต่อด้วยชื่อบิล ถ้าตัวอย่างเป็นคำสั่งดูบิลเสมอ
+ * คนที่กำลังบอกว่าจ่ายแล้วพิมพ์ตามจะได้แค่การ์ดบิล ไม่ได้บันทึกอะไร
+ */
+export function billChoices(titles: string[], command = "บิล"): TextMessage {
   return text(
     [
       "❓ ตอนนี้มีบิลค้างอยู่หลายใบ",
       "",
       ...titles.map((title) => `• ${title}`),
       "",
-      'ระบุชื่อบิลด้วย เช่น "บอทจ๋า บิล ' + (titles[0] ?? "ค่ากินข้าว") + '"',
+      `ระบุชื่อบิลด้วย เช่น "บอทจ๋า ${command} ${titles[0] ?? "ค่ากินข้าว"}"`,
     ].join("\n"),
   );
 }
@@ -957,8 +1069,15 @@ export function billChoices(titles: string[]): TextMessage {
 type PaymentOutcome = {
   shares: BillShareRow[];
   people: { user: { display_name: string }; amountSatang: number }[];
+  unchanged: { display_name: string }[];
   refused: { user: { display_name: string }; reason: string }[];
 };
+
+/** คนที่อยู่ในสถานะนั้นอยู่แล้ว ขึ้นแยกบรรทัด ไม่ปนกับคนที่เพิ่งบันทึก */
+function unchangedLines(unchanged: PaymentOutcome["unchanged"], state: string): string[] {
+  if (unchanged.length === 0) return [];
+  return [`ℹ️ ${unchanged.map((user) => user.display_name).join(", ")} ${state}`];
+}
 
 function refusedLines(refused: PaymentOutcome["refused"]): string[] {
   const notInBill = refused
@@ -996,6 +1115,7 @@ export function paymentRecorded(actorName: string, result: PaymentOutcome): Text
   return text(
     [
       names.length > 0 ? headline : "ℹ️ ยังไม่มีอะไรถูกบันทึกนะครับ",
+      ...unchangedLines(result.unchanged, "จ่ายบิลนี้ไปแล้ว"),
       ...refusedLines(result.refused),
       settled ? "🎉 ครบทุกคนแล้ว" : `เหลืออีก ${unpaid.length} คน`,
     ].join("\n"),
@@ -1011,6 +1131,7 @@ export function paymentUndone(actorName: string, result: PaymentOutcome): TextMe
       names.length > 0
         ? `↩️ ${actorName} เอา ${names.join(", ")} กลับไปเป็นยังไม่จ่ายแล้ว`
         : "ℹ️ ไม่มีอะไรถูกเปลี่ยน",
+      ...unchangedLines(result.unchanged, "ยังไม่จ่ายอยู่แล้ว"),
       ...refusedLines(result.refused),
       `ค้างอยู่ ${unpaid.length} คน`,
     ].join("\n"),
@@ -1054,7 +1175,7 @@ function fitLabel(label: string): string {
   return label.length <= MAX_ACTION_LABEL ? label : `${label.slice(0, MAX_ACTION_LABEL - 1)}…`;
 }
 
-/** เหตุผลที่คิดค่ารอบไม่ได้ ทั้งที่มีรอบเปิดอยู่ */
+/** เหตุผลที่คิดค่ารอบไม่ได้ ทั้งที่มีเกมที่ยังคิดค่ารอบได้อยู่ */
 export function gameBillBlockedNote(game: GameRow, reason: GameBillBlock): string {
   const date = formatThaiDate(game.play_date);
   return reason === "not_creator"
@@ -1068,21 +1189,25 @@ export function gameBillBlockedNote(game: GameRow, reason: GameBillBlock): strin
  * วันที่ของรอบอยู่ในตัวการ์ด ไม่ใส่ในป้ายปุ่ม เพราะปุ่มครึ่งแถวใส่ได้แค่ราวสิบกว่าตัวอักษร
  */
 export function billMenu(pendingId: string, options: BillMenuOptions): FlexMessage {
-  const { game, gameBlocked, editableBills } = options;
+  const { games, gameBlocked, editableBills } = options;
 
-  const details: FlexComponent[] = game
-    ? [
-        infoRow(
-          "table-tennis-paddle-ball",
-          `รอบ ${formatThaiDate(game.play_date)}${game.court_name ? ` · ${game.court_name}` : ""}`,
-        ),
-      ]
-    : gameBlocked
-      ? [note(gameBillBlockedNote(gameBlocked.game, gameBlocked.reason))]
-      : [];
+  // เกมที่คิดค่ารอบได้มีหลายเกม บอกไว้ทุกเกม กด "คิดค่ารอบ" แล้วค่อยถามว่ารอบไหน
+  const details: FlexComponent[] =
+    games.length > 0
+      ? games.map((game) =>
+          infoRow(
+            "table-tennis-paddle-ball",
+            `รอบ ${formatThaiDate(game.play_date)}${game.court_name ? ` · ${game.court_name}` : ""}`,
+          ),
+        )
+      : gameBlocked
+        ? [note(gameBillBlockedNote(gameBlocked.game, gameBlocked.reason))]
+        : [];
 
   return questionCard({ icon: "calculator", text: "คิดเงินอะไรดี?" }, details, [
-    ...(game ? [choice("คิดค่ารอบ", wizardData(pendingId, "bill_kind", "game"), "table-tennis-paddle-ball")] : []),
+    ...(games.length > 0
+      ? [choice("คิดค่ารอบ", wizardData(pendingId, "bill_kind", "game"), "table-tennis-paddle-ball")]
+      : []),
     choice("สร้างบิลใหม่", wizardData(pendingId, "bill_kind", "new"), "plus"),
     ...(editableBills.length > 0 ? [choice("แก้บิลเดิม", wizardData(pendingId, "bill_kind", "edit"), "pen")] : []),
   ]);
@@ -1273,45 +1398,46 @@ export function askEditItems(): TextMessage {
  * ใครอยากรู้ว่าใครค้างให้พิมพ์ถามเอง ซึ่งเป็น reply และฟรี
  */
 export function digestCard(lines: {
-  game: {
+  games: {
     playDate: string;
     startTime: string;
     durationMinutes: number;
     courtName: string | null;
     joined: number;
     max: number;
-  } | null;
-  gameIsOverdue: boolean;
+  }[];
   unpaidBillCount: number;
   unpaidTotalSatang: number;
 }): FlexMessage {
   const body: FlexComponent[] = [];
 
-  if (lines.game) {
-    const { playDate, startTime, durationMinutes, courtName, joined, max } = lines.game;
+  if (lines.games.length > 0) {
     body.push(
       vbox(
         [
-          heading(
-            { icon: "table-tennis-paddle-ball", text: lines.gameIsOverdue ? "รอบที่ยังไม่ได้ปิด" : "มีนัด" },
-            lines.gameIsOverdue ? "warn" : "accent",
+          heading({ icon: "table-tennis-paddle-ball", text: "มีนัด" }, "accent"),
+          // กลุ่มเปิดได้หลายรอบ บอกทุกรอบที่เปิดอยู่ เรียงตามวันเล่น
+          ...lines.games.map(({ playDate, startTime, durationMinutes, courtName, joined, max }, index) =>
+            vbox(
+              [
+                {
+                  type: "text",
+                  text: `${formatThaiDate(playDate)} ${formatTimeRange(startTime, durationMinutes)}${courtName ? ` · ${courtName}` : ""}`,
+                  size: "sm",
+                  color: COLOR.ink,
+                  wrap: true,
+                },
+                {
+                  type: "text",
+                  text: `ลงชื่อแล้ว ${joined}/${max} คน`,
+                  size: "sm",
+                  color: COLOR.muted,
+                  wrap: true,
+                },
+              ],
+              { spacing: "xs", ...(index > 0 ? { margin: "md" } : {}) },
+            ),
           ),
-          {
-            type: "text",
-            text: `${formatThaiDate(playDate)} ${formatTimeRange(startTime, durationMinutes)}${courtName ? ` · ${courtName}` : ""}`,
-            size: "sm",
-            color: COLOR.ink,
-            wrap: true,
-          },
-          {
-            type: "text",
-            text: lines.gameIsOverdue
-              ? 'เล่นจบแล้วพิมพ์ "บอทจ๋า ปิดรอบ" เพื่อเปิดรอบใหม่ได้'
-              : `ลงชื่อแล้ว ${joined}/${max} คน`,
-            size: "sm",
-            color: COLOR.muted,
-            wrap: true,
-          },
         ],
         { spacing: "xs" },
       ),
@@ -1374,36 +1500,44 @@ export function nagEdits(editCount: number): TextMessage {
   );
 }
 
-export function gameSummary(game: GameRow): string {
-  return [
-    ...(game.court_name ? [`🏟️ ${game.court_name}`] : []),
-    `📅 ${formatThaiDate(game.play_date)}`,
-    `⏰ ${formatTimeRange(game.start_time, game.duration_minutes)}`,
-    `🏸 ${game.court_count} คอร์ท`,
-  ].join("\n");
-}
-
 /** ข้อความสำหรับแต่ละ error code ตาม spec §26 */
 export function errorMessage(code: ErrorCode, details: Record<string, unknown> = {}): TextMessage {
   switch (code) {
-    case "GAME_ALREADY_OPEN": {
-      const game = details.game as GameRow | undefined;
+    case "GAME_LIMIT_REACHED": {
+      const games = (details.games as GameRow[] | undefined) ?? [];
       return text(
         [
-          "⛔ กลุ่มนี้มีรอบที่เปิดอยู่แล้ว",
-          ...(game ? ["", gameSummary(game)] : []),
+          `⛔ กลุ่มนี้เปิดรอบไว้ครบ ${games.length} รอบแล้ว`,
           "",
-          "ต้องปิดรอบหรือยกเลิกรอบเดิมก่อน",
+          ...games.map((game) => `• ${roundLabel(game)} · ${game.court_name ?? "BADMINTON"}`),
+          "",
+          "ต้องปิดหรือยกเลิกรอบเดิมก่อน ถึงจะเปิดรอบใหม่ได้",
         ].join("\n"),
       );
     }
-    case "NO_OPEN_GAME":
+    case "NO_OPEN_GAME": {
+      // LLM ระบุวันหรือเวลามา แต่ไม่มีรอบนั้น บอกให้ตรงกับที่ถาม ไม่ใช่บอกว่าไม่มีรอบเลย
+      const date = details.round_date as string | undefined;
+      const time = details.round_time as string | undefined;
+      if (date || time) {
+        const wanted = [date ? formatThaiDate(date) : "", time ?? ""].filter(Boolean).join(" ");
+        return text(`❌ ไม่มีรอบ ${wanted} ที่เปิดอยู่\n\nพิมพ์ "บอทจ๋า ใครตีบ้าง" เพื่อดูรอบที่เปิดอยู่`);
+      }
       return text('❌ ตอนนี้ไม่มีรอบตีที่เปิดอยู่\n\nพิมพ์ "บอทจ๋า เปิดตี" เพื่อเปิดรอบใหม่');
-    case "ALREADY_JOINED":
+    }
+    case "ALREADY_JOINED": {
+      // all_rounds = ดูมาทุกรอบที่เปิดอยู่แล้ว (PRP multi-open-rounds §4.2)
+      const names = (details.names as string[] | undefined) ?? [];
+      if (details.all_rounds) {
+        return text(`ℹ️ ${names.length > 0 ? `${names.join(", ")} ` : "พี่"}ลงชื่อไว้ครบทุกรอบแล้วนะครับ`);
+      }
       return text("ℹ️ พี่ลงชื่อรอบนี้ไว้แล้วนะครับ");
+    }
     case "NOT_JOINED":
-      return text("ℹ️ พี่ยังไม่ได้ลงชื่อรอบนี้นะครับ");
+      return text(details.all_rounds ? "ℹ️ พี่ยังไม่ได้ลงชื่อรอบไหนเลยนะครับ" : "ℹ️ พี่ยังไม่ได้ลงชื่อรอบนี้นะครับ");
     case "GAME_FULL": {
+      if (details.all_rounds) return text("⛔ รอบที่เหลือเต็มหมดแล้ว\n\nไม่สามารถลงชื่อเพิ่มได้");
+
       const current = details.current_players ?? "";
       const max = details.max_players ?? "";
       return text(`⛔ รอบนี้เต็มแล้ว\n\n🏸 ${current}/${max} คน\n\nไม่สามารถลงชื่อเพิ่มได้`);
@@ -1439,6 +1573,26 @@ export function errorMessage(code: ErrorCode, details: Record<string, unknown> =
       return text('❌ รอบนี้ยังไม่ได้คิดเงิน\n\nคนที่เปิดรอบพิมพ์ "บอทจ๋า คิดเงิน" ได้เลย');
     case "BILL_ALREADY_EXISTS":
       return text('⛔ รอบนี้คิดเงินไปแล้ว\n\nถ้าจะคิดใหม่ต้องพิมพ์ "บอทจ๋า ยกเลิกบิล" ก่อน');
+    case "BILL_AMBIGUOUS":
+      return billChoices((details.titles as string[] | undefined) ?? [], (details.command as string | undefined) || "บิล");
+    case "BILL_TITLE_TAKEN": {
+      const title = String(details.title ?? "");
+      return text(`⛔ มีบิลชื่อ "${title}" เปิดอยู่แล้ว\n\nตั้งชื่ออื่นได้เลย เช่น "${title} 2"`);
+    }
+    case "NOTHING_OWED": {
+      const names = (details.names as string[] | undefined) ?? [];
+      return text(`ℹ️ ${names.join(", ")} ไม่มีบิลค้างจ่ายแล้วครับ`);
+    }
+    case "NOTHING_PAID": {
+      const names = (details.names as string[] | undefined) ?? [];
+      return text(`ℹ️ ยังไม่มีบิลไหนที่บันทึกว่า ${names.join(", ")} จ่ายแล้วครับ`);
+    }
+    case "ALL_BILLS_SETTLED": {
+      const titles = (details.titles as string[] | undefined) ?? [];
+      return text(
+        `✅ ทุกบิลจ่ายครบแล้วครับ\n\nอยากเปิดดูใบไหน พิมพ์ชื่อบิลต่อท้าย เช่น "บอทจ๋า บิล ${titles[0] ?? "ค่ากินข้าว"}"`,
+      );
+    }
     case "NOT_YOUR_GUEST":
       return text("⛔ ถอนได้เฉพาะตัวเองกับคนที่พี่ลงชื่อให้นะครับ");
     case "PERSON_NOT_FOUND": {

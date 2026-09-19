@@ -1,15 +1,8 @@
 import type { LineMessage } from "@/lib/line";
-import {
-  askCourtCount,
-  confirmCancelGame,
-  confirmCloseGame,
-  editMenu,
-  helpMenu,
-} from "@/line/messages";
+import { askCourtCount, helpMenu } from "@/line/messages";
 import type { LineUserRow } from "@/repositories/types";
-import { startCancelGame, startCloseGame, startEditGame } from "@/services/game-admin.service";
 import { startCreateGame } from "@/services/game.service";
-import { unpaidSharesForGame } from "@/services/bill.service";
+import { parseNames } from "@/services/people.service";
 import {
   doBillMenu,
   doCancelBill,
@@ -18,7 +11,14 @@ import {
   doStartNewBill,
   doUnpaidList,
 } from "./bill-actions";
-import { doJoin, doJoinFor, doLeave, doLeaveFor, doList } from "./game-actions";
+import {
+  doCancel,
+  doClose,
+  doEdit,
+  doJoinFor,
+  doLeaveFor,
+  doList,
+} from "./game-actions";
 import { WAKE_WORD } from "./wake-word";
 
 /** คำสั่งที่ทำงานได้แล้ว ส่วนที่เหลือรอขั้นตอนถัดไปของ spec §29 */
@@ -121,28 +121,18 @@ export async function handleRuleCommand(input: {
       return [askCourtCount(pending.id)];
     }
     case "ลงชื่อ":
-      return args
-        ? doJoinFor(input.lineGroupId, input.user, args)
-        : doJoin(input.lineGroupId, input.user);
+      return doJoinFor(input.lineGroupId, input.user, parseNames(args));
     case "ถอนชื่อ":
-      return args
-        ? doLeaveFor(input.lineGroupId, input.user, args)
-        : doLeave(input.lineGroupId, input.user);
+      return doLeaveFor(input.lineGroupId, input.user, parseNames(args));
     case "ใครตีบ้าง":
     case "รายชื่อ":
       return doList(input.lineGroupId);
-    case "แก้ไข": {
-      const { pending } = await startEditGame(input.lineGroupId, input.user.id);
-      return [editMenu(pending.id)];
-    }
-    case "ยกเลิก": {
-      const { pending, game, joinedCount } = await startCancelGame(input.lineGroupId, input.user.id);
-      return [confirmCancelGame(pending.id, game, joinedCount)];
-    }
-    case "ปิดรอบ": {
-      const { pending, game, joinedCount } = await startCloseGame(input.lineGroupId, input.user.id);
-      return [confirmCloseGame(pending.id, game, joinedCount, await unpaidSharesForGame(game.id))];
-    }
+    case "แก้ไข":
+      return doEdit(input.lineGroupId, input.user);
+    case "ยกเลิก":
+      return doCancel(input.lineGroupId, input.user);
+    case "ปิดรอบ":
+      return doClose(input.lineGroupId, input.user);
     case "คิดเงิน":
       // ไม่บอกชื่อบิล = ยังไม่รู้ว่าเงินเรื่องไหน ถามก่อนแทนการเดาว่าเป็นค่ารอบ
       return args

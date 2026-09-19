@@ -5,11 +5,13 @@ const collectDigestData = vi.fn(async () => [] as unknown[]);
 const claimDigest = vi.fn(async () => true);
 const pushMessages = vi.fn(async (_to: string, _messages: unknown[], _token: string) => {});
 const getMessageQuota = vi.fn(async () => ({ limit: 300, used: 0 }));
+const closeOverdueGames = vi.fn(async (_today: string) => 0);
 
 vi.mock("@/lib/db", () => ({ getSql: () => sqlMock }));
 vi.mock("@/lib/env", () => ({ getLineAccessToken: () => "test-access-token" }));
 vi.mock("@/lib/line", () => ({ pushMessages, getMessageQuota }));
 vi.mock("@/repositories/digest.repository", () => ({ collectDigestData, claimDigest }));
+vi.mock("@/repositories/game.repository", () => ({ closeOverdueGames }));
 
 const { GET } = await import("@/../app/api/cron/daily/route");
 
@@ -18,30 +20,33 @@ const THURSDAY = new Date("2026-09-17T03:30:00Z");
 
 const groupWithGame = {
   lineGroupId: "C123",
-  game: {
-    id: "1",
-    line_group_id: "C123",
-    created_by: "1",
-    play_date: "2026-09-22",
-    start_time: "19:00",
-    duration_minutes: 120,
-    court_count: 2,
-    max_players: 16,
-    status: "open" as const,
-    court_name: "ABC Badminton",
-    location_url: null,
-    promptpay: null,
-    edit_count: 0,
-  },
-  joinedCount: 6,
+  games: [
+    {
+      game: {
+        id: "1",
+        line_group_id: "C123",
+        created_by: "1",
+        play_date: "2026-09-22",
+        start_time: "19:00",
+        duration_minutes: 120,
+        court_count: 2,
+        max_players: 16,
+        status: "open" as const,
+        court_name: "ABC Badminton",
+        location_url: null,
+        promptpay: null,
+        edit_count: 0,
+      },
+      joinedCount: 6,
+    },
+  ],
   unpaidBillCount: 0,
   unpaidTotalSatang: 0,
 };
 
 const quietGroup = {
   lineGroupId: "C999",
-  game: null,
-  joinedCount: 0,
+  games: [],
   unpaidBillCount: 0,
   unpaidTotalSatang: 0,
 };
@@ -57,6 +62,7 @@ beforeEach(() => {
   claimDigest.mockClear().mockResolvedValue(true);
   pushMessages.mockClear();
   getMessageQuota.mockClear().mockResolvedValue({ limit: 300, used: 0 });
+  closeOverdueGames.mockClear().mockResolvedValue(0);
   delete process.env.CRON_SECRET;
   delete process.env.PUSH_QUOTA_STOP_AT;
 });
@@ -73,6 +79,31 @@ describe("งานที่ทำทุกวัน", () => {
     expect(response.status).toBe(200);
     expect(sqlMock).toHaveBeenCalled();
     expect(pushMessages).not.toHaveBeenCalled();
+  });
+
+  /** รอบที่เลยวันเล่นปิดให้เองทุกเช้า ไม่ใช่เฉพาะวันศุกร์ (PRP multi-open-rounds §5) */
+  it("ปิดรอบที่เลยวันเล่นทุกวัน โดยนับวันตามเวลาไทย", async () => {
+    // 17:30 UTC วันพุธ = 00:30 วันพฤหัสที่ไทย รอบของวันพุธต้องถูกปิดแล้ว
+    vi.setSystemTime(new Date("2026-09-16T17:30:00Z"));
+    closeOverdueGames.mockResolvedValue(2);
+
+    const body = (await (await call()).json()) as { closed: number };
+    expect(closeOverdueGames).toHaveBeenCalledWith("2026-09-17");
+    expect(body.closed).toBe(2);
+  });
+
+  it("ปิดรอบไม่สำเร็จ ยังส่งสรุปวันศุกร์ได้ตามปกติ", async () => {
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    closeOverdueGames.mockRejectedValue(new Error("update failed"));
+    collectDigestData.mockResolvedValue([groupWithGame]);
+
+    const response = await call();
+    const body = (await response.json()) as { closed: string };
+    quiet.mockRestore();
+
+    expect(response.status).toBe(200);
+    expect(body.closed).toBe("failed");
+    expect(pushMessages).toHaveBeenCalledTimes(1);
   });
 
   it("ต่อฐานข้อมูลไม่ได้ตอบ 503 และไม่ push", async () => {

@@ -51,6 +51,7 @@ import {
   paymentUndone,
   playerList,
   unpaidList,
+  whichRound,
 } from "@/line/messages";
 import type { BillRow, BillShareRow, GameRow } from "@/repositories/types";
 import { planBillEdit } from "@/services/bill.service";
@@ -111,8 +112,8 @@ describe("ข้อความผลลัพธ์ต้องไม่มี�
     ["รายชื่อผู้เล่น", playerList(game, [{ display_name: "เชวง" }])],
     ["การ์ดบิล", billCard(bill, items, shares, { icon: "receipt", text: "คิดเงินแล้ว" })],
     ["รายชื่อคนค้างจ่าย", unpaidList(bill, shares)],
-    ["บันทึกว่าจ่ายแล้ว", paymentRecorded("เชวง", { shares, people: [{ user: { display_name: "เชวง" }, amountSatang: 30000 }], refused: [] })],
-    ["ย้อนกลับเป็นยังไม่จ่าย", paymentUndone("เชวง", { shares, people: [{ user: { display_name: "เชวง" }, amountSatang: 30000 }], refused: [] })],
+    ["บันทึกว่าจ่ายแล้ว", paymentRecorded("เชวง", { shares, people: [{ user: { display_name: "เชวง" }, amountSatang: 30000 }], unchanged: [], refused: [] })],
+    ["ย้อนกลับเป็นยังไม่จ่าย", paymentUndone("เชวง", { shares, people: [{ user: { display_name: "เชวง" }, amountSatang: 30000 }], unchanged: [], refused: [] })],
     ["ยกเลิกรอบแล้ว", gameCancelled()],
     ["ปิดรอบแล้ว", gameClosed()],
     ["ปิดรอบแล้วแต่ยังมีคนค้าง", gameClosed([shares[1]!])],
@@ -203,7 +204,8 @@ const BUTTON_MESSAGES: [string, LineMessage][] = [
   ["ทักทาย", greeting()],
   ["เมนูช่วยเหลือ", helpMenu()],
   ["เมนูสำรองตอนตีความไม่ออก", fallbackMenu()],
-  ["คิดเงินอะไรดี", billMenu(PENDING_ID, { game, gameBlocked: null, editableBills: [bill] })],
+  ["คิดเงินอะไรดี", billMenu(PENDING_ID, { games: [game], gameBlocked: null, editableBills: [bill] })],
+  ["ถามรอบไหน ชื่อคอร์ทยาว", whichRound(PENDING_ID, "join", [game, { ...game, id: "2", court_name: LONG_LABEL }])],
   ["เลือกบิลที่จะแก้ ชื่อบิลยาว", askWhichBillToEdit(PENDING_ID, [bill, makeBill({ id: "2", title: LONG_LABEL })])],
   ["แก้บิล", editBillCard(PENDING_ID, bill, planBillEdit(bill, items, shares, ADD_WATER), new Map())],
   [

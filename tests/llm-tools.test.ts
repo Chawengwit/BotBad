@@ -55,6 +55,23 @@ describe("tool argument schemas", () => {
   it("tool ที่ไม่มีพารามิเตอร์ ห้ามรับอะไรเพิ่ม", () => {
     expect(toolSchemas.join_game.safeParse({}).success).toBe(true);
     expect(toolSchemas.join_game.safeParse({ user_id: "U1" }).success).toBe(false);
+    expect(toolSchemas.get_open_games.safeParse({ round_date: "2026-09-19" }).success).toBe(false);
+  });
+
+  /** รอบที่หมายถึงระบุด้วยวันและเวลา (PRP multi-open-rounds §6) */
+  it.each([
+    "join_game",
+    "leave_game",
+    "list_players",
+    "propose_edit_game",
+    "propose_cancel_game",
+    "propose_close_game",
+    "start_bill",
+    "propose_create_bill",
+  ] as const)("%s รับวันและเวลาของรอบ ผิดรูปแบบปฏิเสธ", (name) => {
+    expect(toolSchemas[name].safeParse({ round_date: "2026-09-19", round_time: "18:00" }).success).toBe(true);
+    expect(toolSchemas[name].safeParse({ round_date: "เสาร์" }).success).toBe(false);
+    expect(toolSchemas[name].safeParse({ round_time: "6 โมง" }).success).toBe(false);
   });
 
   it("รับค่าที่ถูกต้องของการเปิดรอบ", () => {
@@ -119,7 +136,7 @@ describe("reply limit", () => {
 
 describe("system prompt", () => {
   it("ใส่วันเวลาไทยและชื่อคนที่คุยด้วย", () => {
-    const prompt = buildSystemPrompt({ displayName: "เชวง", openGame: null, now });
+    const prompt = buildSystemPrompt({ displayName: "เชวง", openGames: [], now });
 
     expect(prompt).toContain("2026-09-16");
     expect(prompt).toContain("17:30");
@@ -130,7 +147,7 @@ describe("system prompt", () => {
   it("สรุปรอบที่เปิดอยู่ พร้อมบอกว่าเป็นคนเปิดรอบหรือเปล่า", () => {
     const prompt = buildSystemPrompt({
       displayName: "เชวง",
-      openGame: { game, joinedCount: 5, isCreator: true, hasJoined: false },
+      openGames: [{ game, joinedCount: 5, isCreator: true, hasJoined: false }],
       now,
     });
 
@@ -140,8 +157,28 @@ describe("system prompt", () => {
     expect(prompt).toContain("ยังไม่ได้ลงชื่อ");
   });
 
+  /** LLM ต้องเห็นทุกรอบพร้อมวันที่แบบ YYYY-MM-DD ถึงจะส่ง round_date ได้ตรงรอบ (PRP multi-open-rounds §6) */
+  it("เปิดหลายรอบ บอกทุกรอบพร้อมวันที่ และบอกกติกาเลือกรอบ", () => {
+    const saturday = { ...game, id: "2", play_date: "2026-09-19", court_name: "คอร์ทสามย่าน" };
+    const prompt = buildSystemPrompt({
+      displayName: "เชวง",
+      openGames: [
+        { game, joinedCount: 5, isCreator: true, hasJoined: false },
+        { game: saturday, joinedCount: 2, isCreator: false, hasJoined: true },
+      ],
+      now,
+    });
+
+    expect(prompt).toContain("(2026-09-17)");
+    expect(prompt).toContain("(2026-09-19)");
+    expect(prompt).toContain("คอร์ทสามย่าน");
+    expect(prompt).toContain("ไม่เกิน 3 รอบ");
+    expect(prompt).not.toContain("ครั้งละ 1 รอบ");
+    expect(prompt).toContain("round_date");
+  });
+
   it("ไม่มี placeholder ค้างและมีกฎความปลอดภัยครบ", () => {
-    const prompt = buildSystemPrompt({ displayName: "เชวง", openGame: null, now });
+    const prompt = buildSystemPrompt({ displayName: "เชวง", openGames: [], now });
 
     expect(prompt).not.toContain("{{");
     expect(prompt).toContain("R14");
@@ -153,19 +190,30 @@ describe("system prompt", () => {
    * และห้ามถามรายการเป็นข้อความเฉย ๆ เพราะคำตอบถัดไปจะหลุดไปเป็นคำสั่งดูบิล
    */
   it("มีกฎให้เรียก start_bill เมื่อยังไม่รู้รายการ", () => {
-    const prompt = buildSystemPrompt({ displayName: "เชวง", openGame: null, now });
+    const prompt = buildSystemPrompt({ displayName: "เชวง", openGames: [], now });
 
     expect(prompt).toContain("R23");
     expect(prompt).toContain("start_bill");
     expect(prompt).not.toContain("งานที่กำลังทำ: สร้างบิลใหม่");
   });
 
+  /**
+   * ไม่ระบุชื่อบิล ระบบเลือกใบที่เกี่ยวข้องให้เอง (PRP guests-split-bills-and-digest §5.2)
+   * ถ้า LLM ถามชื่อบิลเองก่อน จะถามถึงใบที่คนนั้นจ่ายไปแล้วเหมือนเดิม
+   */
+  it("ไม่ระบุชื่อบิล ให้เรียก tool เลย ไม่ถามชื่อบิลเองก่อน", () => {
+    const prompt = buildSystemPrompt({ displayName: "เชวง", openGames: [], now });
+
+    expect(prompt).not.toContain("ต้องระบุชื่อบิลทุกครั้ง");
+    expect(prompt).toContain("ห้ามถามชื่อบิลเองก่อน");
+  });
+
   it("ตอบต่อจากปุ่มสร้างบิลใหม่ บอก LLM ว่าข้อความนี้คือบิล พร้อมชื่อที่ตั้งไว้", () => {
-    const named = buildSystemPrompt({ displayName: "เชวง", openGame: null, now, newBill: { title: "ร้านโชคดี" } });
+    const named = buildSystemPrompt({ displayName: "เชวง", openGames: [], now, newBill: { title: "ร้านโชคดี" } });
     expect(named).toContain("งานที่กำลังทำ: สร้างบิลใหม่");
     expect(named).toContain('title "ร้านโชคดี"');
 
-    const unnamed = buildSystemPrompt({ displayName: "เชวง", openGame: null, now, newBill: { title: "" } });
+    const unnamed = buildSystemPrompt({ displayName: "เชวง", openGames: [], now, newBill: { title: "" } });
     expect(unnamed).toContain("ยังไม่ได้ตั้งชื่อบิลให้ถามชื่อก่อน");
   });
 });

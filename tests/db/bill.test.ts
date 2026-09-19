@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { closeSql, type Sql } from "@/lib/db";
 import { isAppError } from "@/errors/app-errors";
 import { cancelBill, listActiveBills } from "@/repositories/bill.repository";
-import { insertGame, updateGameStatus } from "@/repositories/game.repository";
+import { insertGame, listOpenGames, updateGameStatus } from "@/repositories/game.repository";
 import { upsertUser } from "@/repositories/user.repository";
 import type { GameRow, LineUserRow } from "@/repositories/types";
 import { updatePendingPayload, type PendingPayload } from "@/repositories/pending-action.repository";
@@ -11,6 +11,7 @@ import {
   getBill,
   markPayment,
   startCreateBill,
+  startGameBill,
   summarize,
   type BillDraft,
   type BillView,
@@ -77,6 +78,8 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   const lineUserIds: string[] = [];
 
   async function cleanup(): Promise<void> {
+    // ส่งข้อความผ่าน handleEvent จะเปิดโหมดฟังไว้ ไม่ลบจะค้างใน schema เทสทุกครั้งที่รัน
+    await sql`DELETE FROM conversation_sessions WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM pending_actions WHERE line_group_id = ${GROUP_ID}`;
     // ลบผ่าน line_group_id ของบิลโดยตรง บิลลอย ๆ ไม่มี game_id ให้ไล่ตาม
     // bill_shares, bill_items และ bill_item_payers หลุดตามด้วย ON DELETE CASCADE
@@ -134,24 +137,27 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   }
 
   /** เปิดรอบแล้วให้ทุกคนลงชื่อ คนแรกคือผู้สร้างรอบ */
-  async function gameWithPlayers(count: number): Promise<{ owner: LineUserRow; players: LineUserRow[] }> {
+  async function gameWithPlayers(
+    count: number,
+  ): Promise<{ owner: LineUserRow; players: LineUserRow[]; game: GameRow }> {
     const owner = await newUser("เชวง");
-    await openGame(owner.id);
+    const game = await openGame(owner.id);
 
     const players = [owner];
-    await joinGame(GROUP_ID, owner.id);
+    await joinGame(GROUP_ID, game.id, owner.id);
     for (let index = 1; index < count; index += 1) {
       const player = await newUser(`ผู้เล่น ${index}`);
-      await joinGame(GROUP_ID, player.id);
+      await joinGame(GROUP_ID, game.id, player.id);
       players.push(player);
     }
 
-    return { owner, players };
+    return { owner, players, game };
   }
 
-  /** เดินทางเดียวกับผู้ใช้จริง: เริ่ม wizard แล้วกดยืนยัน */
+  /** เดินทางเดียวกับผู้ใช้จริง: เริ่ม wizard ของรอบที่เปิดอยู่ แล้วกดยืนยัน */
   async function billFor(owner: LineUserRow, draft: BillDraft): Promise<BillView> {
-    const { pending } = await startCreateBill(GROUP_ID, owner.id);
+    const [game] = await listOpenGames(GROUP_ID, sql);
+    const { pending } = await startGameBill(GROUP_ID, owner.id, game!.id);
     await updatePendingPayload(pending.id, draft as PendingPayload);
     return confirmCreateBill(pending.id, GROUP_ID, owner.id);
   }
@@ -186,18 +192,18 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   });
 
   it("คนที่ไม่ได้เปิดรอบ คิดเงินไม่ได้", async () => {
-    const { players } = await gameWithPlayers(2);
+    const { players, game } = await gameWithPlayers(2);
 
-    expect(await errorCode(() => startCreateBill(GROUP_ID, players[1]!.id))).toBe(
+    expect(await errorCode(() => startGameBill(GROUP_ID, players[1]!.id, game.id))).toBe(
       "NOT_GAME_CREATOR",
     );
   });
 
   it("ยังไม่มีใครลงชื่อ หารไม่ได้", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner.id);
+    const game = await openGame(owner.id);
 
-    expect(await errorCode(() => startCreateBill(GROUP_ID, owner.id))).toBe("NO_PLAYERS_TO_SPLIT");
+    expect(await errorCode(() => startGameBill(GROUP_ID, owner.id, game.id))).toBe("NO_PLAYERS_TO_SPLIT");
   });
 
   // เลิกบังคับ 1 รอบ 1 บิลแล้ว รอบหนึ่งมีได้ทั้งค่าคอร์ทและค่ากินข้าว (PRP §5.1)
@@ -252,8 +258,8 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   });
 
   it("แต่ละรายการเก็บคนไม่เท่ากันได้ ยอดรายคนจึงต่างกัน", async () => {
-    const { owner, players } = await gameWithPlayers(3);
-    const { pending } = await startCreateBill(GROUP_ID, owner.id);
+    const { owner, players, game } = await gameWithPlayers(3);
+    const { pending } = await startGameBill(GROUP_ID, owner.id, game.id);
 
     await updatePendingPayload(pending.id, {
       court_fee: 300,
@@ -284,10 +290,11 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     expect(first.people.map((entry) => entry.amountSatang)).toEqual([10000]);
     expect(summarize(first.shares).unpaidTotalSatang).toBe(30000);
 
-    // กดซ้ำไม่ใช่ error แค่ไม่มีอะไรเปลี่ยน
-    const again = await markPayment(GROUP_ID, players[1]!, [players[1]!], true);
-    expect(again.refused).toHaveLength(0);
-    expect(summarize(again.shares).unpaidTotalSatang).toBe(30000);
+    // กดซ้ำไม่บันทึกซ้ำ บอกว่าไม่มีบิลค้างแทน (PRP guests-split-bills-and-digest §5.2)
+    expect(await errorCode(() => markPayment(GROUP_ID, players[1]!, [players[1]!], true))).toBe(
+      "NOTHING_OWED",
+    );
+    expect(summarize((await getBill(GROUP_ID)).shares).unpaidTotalSatang).toBe(30000);
 
     const undo = await markPayment(GROUP_ID, players[1]!, [players[1]!], false);
     expect(summarize(undo.shares).unpaidTotalSatang).toBe(40000);
@@ -308,11 +315,14 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
 
   it("คนที่ไม่ได้อยู่ในบิล กดจ่ายไม่ได้", async () => {
     const { owner } = await gameWithPlayers(2);
-    await billFor(owner, { court_fee: 200 });
+    const { bill } = await billFor(owner, { court_fee: 200 });
 
-    // ไม่ throw แล้ว เพราะคำสั่งเดียวกดแทนได้หลายคน คนที่ทำไม่ได้ต้องไม่ล้มทั้งคำสั่ง
+    // ไม่ได้อยู่ในบิลไหนเลย จึงไม่มีใบให้เลือก
     const outsider = await newUser("คนนอก");
-    const result = await markPayment(GROUP_ID, outsider, [outsider], true);
+    expect(await errorCode(() => markPayment(GROUP_ID, outsider, [outsider], true))).toBe("NOTHING_OWED");
+
+    // ระบุบิลมาเองไม่ throw เพราะคำสั่งเดียวกดแทนได้หลายคน คนที่ทำไม่ได้ต้องไม่ล้มทั้งคำสั่ง
+    const result = await markPayment(GROUP_ID, outsider, [outsider], true, bill.title);
 
     expect(result.people).toHaveLength(0);
     expect(result.refused).toEqual([{ user: outsider, reason: "not_in_bill" }]);
@@ -320,10 +330,10 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   });
 
   it("ถอนชื่อหลังคิดเงินแล้ว ยอดในบิลไม่เปลี่ยน", async () => {
-    const { owner, players } = await gameWithPlayers(4);
+    const { owner, players, game } = await gameWithPlayers(4);
     const before = await billFor(owner, { court_fee: 400 });
 
-    await leaveGame(GROUP_ID, players[3]!.id);
+    await leaveGame(GROUP_ID, game.id, players[3]!.id);
 
     const after = await getBill(GROUP_ID);
     expect(after.shares).toHaveLength(4);
@@ -450,7 +460,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
   });
 
   it("ยกเลิกบิลผ่านคำสั่งแล้วคิดใหม่ได้", async () => {
-    const { owner } = await gameWithPlayers(2);
+    const { owner, game } = await gameWithPlayers(2);
     await billFor(owner, { court_fee: 200 });
 
     const collected: Collected[] = [];
@@ -463,7 +473,7 @@ describe.skipIf(!canRunDbTests())("คิดเงินค่ารอบตี
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ยกเลิกบิลแล้ว");
 
     expect(await errorCode(() => getBill(GROUP_ID))).toBe("NO_BILL");
-    expect(await errorCode(() => startCreateBill(GROUP_ID, owner.id))).toBe("NO_ERROR");
+    expect(await errorCode(() => startGameBill(GROUP_ID, owner.id, game.id))).toBe("NO_ERROR");
   });
 
   it("ปิดรอบได้แม้ยังจ่ายไม่ครบ แต่ต้องเตือนว่าเหลือใคร", async () => {

@@ -69,7 +69,7 @@ function valueOf(message: FlexMessage, label: string): string | undefined {
  */
 describe("การ์ดคิดเงินอะไรดี", () => {
   it("คิดค่ารอบได้และมีบิลให้แก้ ได้ครบสามทาง", () => {
-    const card = billMenu(PENDING_ID, { game, gameBlocked: null, editableBills: [bill] });
+    const card = billMenu(PENDING_ID, { games: [game], gameBlocked: null, editableBills: [bill] });
 
     expect(buttonLabels(card)).toEqual(["คิดค่ารอบ", "สร้างบิลใหม่", "แก้บิลเดิม"]);
     expect(valueOf(card, "คิดค่ารอบ")).toBe("game");
@@ -83,14 +83,14 @@ describe("การ์ดคิดเงินอะไรดี", () => {
     ["ยังไม่มีใครลงชื่อ", "no_players", "รอบ ศุกร์ 18 ก.ย. ยังไม่มีใครลงชื่อ เลยยังคิดค่ารอบไม่ได้"],
     ["ไม่ใช่คนเปิดรอบ", "not_creator", "คิดค่ารอบ ศุกร์ 18 ก.ย. ได้เฉพาะคนที่เปิดรอบ"],
   ] as const)("%s: ไม่มีปุ่มคิดค่ารอบ แต่บอกเหตุผลไว้", (_label, reason, note) => {
-    const card = billMenu(PENDING_ID, { game: null, gameBlocked: { game, reason }, editableBills: [bill] });
+    const card = billMenu(PENDING_ID, { games: [], gameBlocked: { game, reason }, editableBills: [bill] });
 
     expect(buttonLabels(card)).toEqual(["สร้างบิลใหม่", "แก้บิลเดิม"]);
     expect(messageText(card)).toContain(note);
   });
 
   it("ไม่มีบิลที่ตัวเองสร้าง ไม่มีปุ่มแก้บิลเดิม", () => {
-    const card = billMenu(PENDING_ID, { game, gameBlocked: null, editableBills: [] });
+    const card = billMenu(PENDING_ID, { games: [game], gameBlocked: null, editableBills: [] });
     expect(buttonLabels(card)).toEqual(["คิดค่ารอบ", "สร้างบิลใหม่"]);
   });
 });

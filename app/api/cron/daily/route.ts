@@ -4,6 +4,7 @@ import { getMessageQuota, pushMessages } from "@/lib/line";
 import { formatErrorForLog } from "@/lib/log";
 import { isFridayInBangkok, todayInBangkok } from "@/lib/time";
 import { claimDigest, collectDigestData } from "@/repositories/digest.repository";
+import { closeOverdueGames } from "@/repositories/game.repository";
 import { buildDigest } from "@/services/digest.service";
 
 // ใช้ node:crypto ทางอ้อมผ่าน postgres.js จึงต้องเป็น Node runtime
@@ -14,7 +15,8 @@ export const runtime = "nodejs";
  *
  * cron ยิง "ทุกวัน" ตอน 10 โมงไทย แต่ push เฉพาะวันศุกร์
  *   ทุกวัน  → แตะฐานข้อมูล กันโปรเจค Supabase แบบ Free ถูก pause จากการไม่มีการใช้งาน
- *   ศุกร์    → แตะฐานข้อมูล + ส่งสรุปเข้ากลุ่มที่มีเรื่องจะบอก
+ *           + ปิดรอบที่เลยวันเล่นแล้ว (PRP multi-open-rounds §5)
+ *   ศุกร์    → ส่งสรุปเข้ากลุ่มที่มีเรื่องจะบอก
  *
  * ที่ไม่ตั้ง cron เป็นรายสัปดาห์ไปเลย เพราะ Supabase pause เมื่อไม่มีการใช้งานครบ 7 วัน
  * ซึ่งเท่ากับระยะห่างของ cron รายศุกร์พอดี บวกความคลาด ±59 นาทีของ Hobby แล้วอาจหลุด
@@ -61,7 +63,7 @@ async function sendDigests(today: string): Promise<DigestResult> {
   }
 
   for (const group of groups) {
-    const messages = buildDigest(group, today);
+    const messages = buildDigest(group);
     if (!messages) {
       result.skipped += 1;
       continue;
@@ -86,6 +88,19 @@ async function sendDigests(today: string): Promise<DigestResult> {
   return result;
 }
 
+/**
+ * ปิดรอบที่วันเล่นผ่านไปแล้วตามเวลาไทย คืนจำนวนรอบที่ปิด
+ * ปิดไม่สำเร็จแค่ log ไว้ พรุ่งนี้ cron ก็ปิดให้อีกรอบ และต้องไม่ทำให้สรุปวันศุกร์ไม่ได้ส่ง
+ */
+async function closeOverdue(today: string): Promise<number | "failed"> {
+  try {
+    return await closeOverdueGames(today);
+  } catch (error) {
+    console.error("[cron] ปิดรอบที่เลยวันเล่นไม่สำเร็จ:", formatErrorForLog(error));
+    return "failed";
+  }
+}
+
 export async function GET(request: Request): Promise<Response> {
   // ตั้ง CRON_SECRET ไว้เมื่อไหร่ ก็ต้องส่ง Authorization มาด้วยเมื่อนั้น
   const secret = process.env.CRON_SECRET?.trim();
@@ -101,15 +116,17 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const today = todayInBangkok();
+  // ปิดก่อนสรุป สรุปวันศุกร์จะได้ไม่พูดถึงรอบที่เล่นจบไปแล้ว
+  const closed = await closeOverdue(today);
   if (!isFridayInBangkok()) {
-    return Response.json({ ok: true, today, digest: "ยังไม่ถึงวันศุกร์" });
+    return Response.json({ ok: true, today, closed, digest: "ยังไม่ถึงวันศุกร์" });
   }
 
   try {
-    return Response.json({ ok: true, today, digest: await sendDigests(today) });
+    return Response.json({ ok: true, today, closed, digest: await sendDigests(today) });
   } catch (error) {
     // ฐานข้อมูลตอบแล้ว ถือว่างานหลักผ่าน สรุปพังก็แค่ log ไม่ต้องให้ cron ขึ้นแดง
     console.error("[cron] สรุปประจำสัปดาห์ล้มทั้งชุด:", formatErrorForLog(error));
-    return Response.json({ ok: true, today, digest: "failed" });
+    return Response.json({ ok: true, today, closed, digest: "failed" });
   }
 }

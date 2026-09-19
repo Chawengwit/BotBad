@@ -157,7 +157,7 @@ describe.skipIf(!canRunDbTests())("แขกและการลงชื่อ
   it("แขกนับรวมในจำนวนคนของรอบ ลงเกินไม่ได้", async () => {
     const hok = await newUser("ฮก");
     const game = await openGame(hok.user.id, 2);
-    await joinGame(GROUP_ID, hok.user.id, sql);
+    await joinGame(GROUP_ID, game.id, hok.user.id, sql);
 
     const collected: Collected[] = [];
     await handleEvent(
@@ -202,7 +202,7 @@ describe.skipIf(!canRunDbTests())("แขกและการลงชื่อ
     const game = await openGame(hok.user.id);
 
     // Bank ต้องเคยอยู่ในรอบของกลุ่มนี้ก่อน บอทถึงจะรู้จักชื่อ (ดึงรายชื่อจาก LINE ไม่ได้)
-    await joinGame(GROUP_ID, bank.user.id, sql);
+    await joinGame(GROUP_ID, game.id, bank.user.id, sql);
     await sql`UPDATE game_players SET status = 'cancelled' WHERE game_id = ${game.id} AND user_id = ${bank.user.id}`;
 
     const collected: Collected[] = [];
@@ -220,7 +220,7 @@ describe.skipIf(!canRunDbTests())("แขกและการลงชื่อ
     expect(await names(game.id)).toEqual([]);
   });
 
-  it("ชื่อที่ไม่รู้จักตอนถอน บอกว่าไม่รู้จัก ไม่สร้างแขกใหม่", async () => {
+  it("ถอนชื่อที่ไม่ได้อยู่ในรายชื่อ บอกว่าไม่อยู่ในรายชื่อ ไม่สร้างแขกใหม่", async () => {
     const hok = await newUser("ฮก");
     await openGame(hok.user.id);
 
@@ -230,7 +230,7 @@ describe.skipIf(!canRunDbTests())("แขกและการลงชื่อ
       contextFor(collected, "ฮก"),
     );
 
-    expect(messageTexts(collected.at(-1)!.messages)).toContain("ไม่รู้จัก");
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("สมชาย ไม่ได้อยู่ในรายชื่อรอบนี้");
     expect(await sql`SELECT id FROM users WHERE line_group_id = ${GROUP_ID}`).toHaveLength(0);
   });
 

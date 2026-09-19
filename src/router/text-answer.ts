@@ -56,7 +56,7 @@ async function applyCourtName(
   }
 
   if (pending.action_type === "edit_game") {
-    return advanceEditWizard(pending.id, pending.line_group_id, "court_name", parsed.data);
+    return advanceEditWizard(pending, "court_name", parsed.data);
   }
 
   return advanceCreateWizard(pending, { court_name: parsed.data });
@@ -74,7 +74,7 @@ async function applyLocation(
   }
 
   if (pending.action_type === "edit_game") {
-    return advanceEditWizard(pending.id, pending.line_group_id, "location_url", url);
+    return advanceEditWizard(pending, "location_url", url);
   }
 
   return advanceCreateWizard(pending, { location_url: url });
@@ -90,7 +90,7 @@ async function applyPromptPay(pending: PendingActionRow, text: string): Promise<
   }
 
   if (pending.action_type === "edit_game") {
-    return advanceEditWizard(pending.id, pending.line_group_id, "promptpay", parsed.data);
+    return advanceEditWizard(pending, "promptpay", parsed.data);
   }
 
   return advanceCreateWizard(pending, { promptpay: parsed.data });

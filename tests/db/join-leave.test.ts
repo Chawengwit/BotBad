@@ -50,6 +50,8 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
   const lineUserIds: string[] = [];
 
   async function cleanup(): Promise<void> {
+    // ส่งข้อความผ่าน handleEvent จะเปิดโหมดฟังไว้ ไม่ลบจะค้างใน schema เทสทุกครั้งที่รัน
+    await sql`DELETE FROM conversation_sessions WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM game_players WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
     await sql`DELETE FROM games WHERE line_group_id = ${GROUP_ID}`;
     if (lineUserIds.length > 0) {
@@ -212,10 +214,10 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
   it("แสดงรายชื่อตามลำดับที่ลงชื่อ", async () => {
     const owner = await newUser("เชวง");
     const second = await newUser("Bank");
-    await openGame(owner.user.id);
+    const game = await openGame(owner.user.id);
 
-    await joinGame(GROUP_ID, owner.user.id, sql);
-    await joinGame(GROUP_ID, second.user.id, sql);
+    await joinGame(GROUP_ID, game.id, owner.user.id, sql);
+    await joinGame(GROUP_ID, game.id, second.user.id, sql);
 
     const collected: Collected[] = [];
     await handleEvent(textEvent("บอทจ๋า ใครตีบ้าง", owner.lineUserId), contextFor(collected, "เชวง"));
@@ -228,11 +230,11 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
 
   it("รอบเต็มแล้วคนต่อไปลงไม่ได้", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner.user.id); // 1 คอร์ท = 8 คน
+    const game = await openGame(owner.user.id); // 1 คอร์ท = 8 คน
 
     for (let index = 0; index < 8; index += 1) {
       const player = await newUser(`ผู้เล่น ${index + 1}`);
-      await joinGame(GROUP_ID, player.user.id, sql);
+      await joinGame(GROUP_ID, game.id, player.user.id, sql);
     }
 
     const extra = await newUser("คนที่เก้า");
@@ -245,7 +247,7 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
 
   it("กดลงชื่อพร้อมกันตอนใกล้เต็ม ก็ไม่เกินจำนวนคอร์ท", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner.user.id); // รับได้ 8 คน
+    const game = await openGame(owner.user.id); // รับได้ 8 คน
 
     const players = [];
     for (let index = 0; index < 12; index += 1) {
@@ -256,7 +258,7 @@ describe.skipIf(!canRunDbTests())("ลงชื่อและถอนชื่
     const concurrent = createSql(process.env.DATABASE_URL!, TEST_SCHEMA, { max: 6 });
     try {
       const results = await Promise.allSettled(
-        players.map((player) => joinGame(GROUP_ID, player.user.id, concurrent)),
+        players.map((player) => joinGame(GROUP_ID, game.id, player.user.id, concurrent)),
       );
 
       const joined = results.filter((result) => result.status === "fulfilled").length;

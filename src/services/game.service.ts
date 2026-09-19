@@ -1,14 +1,15 @@
 import { z } from "zod";
 import { AppError } from "@/errors/app-errors";
-import { getSql } from "@/lib/db";
+import { getSql, type Queryable, type Sql } from "@/lib/db";
 import { DATE_PATTERN, isInThePast, TIME_PATTERN } from "@/lib/time";
 import {
   consumePendingAction,
   createPendingAction,
   type PendingActionRow,
 } from "@/repositories/pending-action.repository";
-import { findOpenGame, insertGame, UNIQUE_VIOLATION } from "@/repositories/game.repository";
+import { insertGame, listOpenGames, lockGroup } from "@/repositories/game.repository";
 import type { GameRow } from "@/repositories/types";
+import { MAX_OPEN_GAMES } from "./round.service";
 
 /**
  * ข้อมูลที่ต้องถามก่อนเปิดรอบได้ เรียงตามลำดับที่ wizard ถาม
@@ -75,13 +76,18 @@ export function missingDraftFields(payload: Record<string, unknown>): DraftField
   });
 }
 
-/** เริ่ม wizard เปิดรอบ ถ้ากลุ่มมีรอบเปิดอยู่แล้วต้องไม่ให้เริ่ม (spec §7) */
+/** กลุ่มเปิดรอบพร้อมกันได้ไม่เกิน MAX_OPEN_GAMES รอบ ครบแล้วต้องปิดหรือยกเลิกรอบเดิมก่อน (PRP multi-open-rounds §4.2) */
+export async function requireRoomForGame(lineGroupId: string, sql: Queryable = getSql()): Promise<void> {
+  const open = await listOpenGames(lineGroupId, sql);
+  if (open.length >= MAX_OPEN_GAMES) throw new AppError("GAME_LIMIT_REACHED", { games: open });
+}
+
+/** เริ่ม wizard เปิดรอบ เช็กโควตาตั้งแต่ตอนนี้ จะได้ไม่ให้ตอบครบทุกคำถามแล้วค่อยบอกว่าเปิดไม่ได้ */
 export async function startCreateGame(
   lineGroupId: string,
   userId: string,
 ): Promise<PendingActionRow> {
-  const open = await findOpenGame(lineGroupId);
-  if (open) throw new AppError("GAME_ALREADY_OPEN", { game: open });
+  await requireRoomForGame(lineGroupId);
 
   return createPendingAction({
     lineGroupId,
@@ -89,10 +95,6 @@ export async function startCreateGame(
     actionType: "create_game",
     payload: {},
   });
-}
-
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === "object" && error !== null && (error as { code?: string }).code === UNIQUE_VIOLATION;
 }
 
 /**
@@ -103,8 +105,9 @@ export async function confirmCreateGame(
   pendingId: string,
   lineGroupId: string,
   userId: string,
+  sql: Sql = getSql(),
 ): Promise<GameRow> {
-  return getSql().begin(async (tx) => {
+  return sql.begin(async (tx) => {
     const pending = await consumePendingAction(pendingId, lineGroupId, tx);
     if (!pending) throw new AppError("PENDING_EXPIRED");
     if (pending.requested_by !== userId) throw new AppError("NOT_REQUESTER");
@@ -117,26 +120,25 @@ export async function confirmCreateGame(
     const draft = parsed.data;
     if (isInThePast(draft.play_date, draft.start_time)) throw new AppError("DATE_IN_PAST");
 
-    try {
-      return await insertGame(
-        {
-          lineGroupId,
-          createdBy: userId,
-          playDate: draft.play_date,
-          startTime: draft.start_time,
-          durationMinutes: draft.duration_minutes,
-          courtCount: draft.court_count,
-          maxPlayers: draft.max_players,
-          courtName: draft.court_name,
-          locationUrl: draft.location_url ?? null,
-          promptpay: draft.promptpay ?? null,
-        },
-        tx,
-      );
-    } catch (error) {
-      // มีคนเปิดรอบตัดหน้าไปแล้ว ระหว่างที่การ์ดยืนยันค้างอยู่
-      if (isUniqueViolation(error)) throw new AppError("GAME_ALREADY_OPEN");
-      throw error;
-    }
+    // เช็กโควตาซ้ำ ระหว่างที่การ์ดค้างอยู่อาจมีคนเปิดรอบจนครบไปแล้ว
+    // ล็อกกลุ่มก่อนนับ ไม่งั้นสองคนกดยืนยันพร้อมกันจะนับได้ไม่ครบทั้งคู่แล้วเปิดเกิน
+    await lockGroup(lineGroupId, tx);
+    await requireRoomForGame(lineGroupId, tx);
+
+    return insertGame(
+      {
+        lineGroupId,
+        createdBy: userId,
+        playDate: draft.play_date,
+        startTime: draft.start_time,
+        durationMinutes: draft.duration_minutes,
+        courtCount: draft.court_count,
+        maxPlayers: draft.max_players,
+        courtName: draft.court_name,
+        locationUrl: draft.location_url ?? null,
+        promptpay: draft.promptpay ?? null,
+      },
+      tx,
+    );
   }) as Promise<GameRow>;
 }

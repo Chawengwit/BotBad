@@ -5,8 +5,6 @@ import type { GroupDigestData } from "@/repositories/digest.repository";
 import type { GameRow } from "@/repositories/types";
 import { hasButtons, messageText } from "./helpers";
 
-const TODAY = "2026-09-18";
-
 const game: GameRow = {
   id: "1",
   line_group_id: "C123",
@@ -25,8 +23,7 @@ const game: GameRow = {
 
 const empty: GroupDigestData = {
   lineGroupId: "C123",
-  game: null,
-  joinedCount: 0,
+  games: [],
   unpaidBillCount: 0,
   unpaidTotalSatang: 0,
 };
@@ -51,19 +48,19 @@ describe("วันศุกร์ตามเวลาไทย", () => {
 
 describe("ไม่มีเรื่องจะบอก = ไม่ส่ง", () => {
   it("ไม่มีรอบ ไม่มีบิลค้าง", () => {
-    expect(summarizeGroup(empty, TODAY)).toBeNull();
-    expect(buildDigest(empty, TODAY)).toBeNull();
+    expect(summarizeGroup(empty)).toBeNull();
+    expect(buildDigest(empty)).toBeNull();
   });
 
   it("บิลจ่ายครบแล้วไม่นับว่ามีเรื่อง", () => {
     const settled = { ...empty, unpaidBillCount: 0, unpaidTotalSatang: 0 };
-    expect(buildDigest(settled, TODAY)).toBeNull();
+    expect(buildDigest(settled)).toBeNull();
   });
 });
 
 describe("เนื้อหาของสรุป", () => {
   it("มีรอบที่เปิดอยู่ บอกวันเวลาและจำนวนคน ไม่ว่าจะตีวันไหน", () => {
-    const body = messageText(buildDigest({ ...empty, game, joinedCount: 6 }, TODAY)![0]!);
+    const body = messageText(buildDigest({ ...empty, games: [{ game, joinedCount: 6 }] })![0]!);
 
     expect(body).toContain("มีนัด");
     expect(body).toContain("อังคาร 22 ก.ย.");
@@ -72,17 +69,23 @@ describe("เนื้อหาของสรุป", () => {
     expect(body).toContain("6/16 คน");
   });
 
-  it("รอบที่วันเล่นผ่านไปแล้ว เตือนให้ปิดรอบ", () => {
-    const overdue = { ...game, play_date: "2026-09-10" };
-    const body = messageText(buildDigest({ ...empty, game: overdue, joinedCount: 8 }, TODAY)![0]!);
+  // กลุ่มเปิดได้หลายรอบ บอกทุกรอบในการ์ดใบเดียว (PRP multi-open-rounds §3.1)
+  it("เปิดหลายรอบ บอกทุกรอบพร้อมจำนวนคนของแต่ละรอบ", () => {
+    const saturday = { ...game, id: "2", play_date: "2026-09-26", court_name: "คอร์ทสามย่าน" };
+    const body = messageText(
+      buildDigest({ ...empty, games: [{ game, joinedCount: 6 }, { game: saturday, joinedCount: 3 }] })![0]!,
+    );
 
-    expect(body).toContain("ยังไม่ได้ปิด");
-    expect(body).toContain("ปิดรอบ");
+    expect(body).toContain("ABC Badminton");
+    expect(body).toContain("6/16 คน");
+    expect(body).toContain("เสาร์ 26 ก.ย.");
+    expect(body).toContain("คอร์ทสามย่าน");
+    expect(body).toContain("3/16 คน");
   });
 
   it("บิลค้างบอกจำนวนใบและยอดรวม", () => {
     const body = messageText(
-      buildDigest({ ...empty, unpaidBillCount: 2, unpaidTotalSatang: 50700 }, TODAY)![0]!,
+      buildDigest({ ...empty, unpaidBillCount: 2, unpaidTotalSatang: 50700 })![0]!,
     );
 
     expect(body).toContain("บิลค้างจ่าย");
@@ -91,10 +94,12 @@ describe("เนื้อหาของสรุป", () => {
   });
 
   it("มีทั้งรอบและบิลก็รวมอยู่ในข้อความเดียว ไม่ push สองครั้ง", () => {
-    const messages = buildDigest(
-      { ...empty, game, joinedCount: 6, unpaidBillCount: 1, unpaidTotalSatang: 9500 },
-      TODAY,
-    )!;
+    const messages = buildDigest({
+      ...empty,
+      games: [{ game, joinedCount: 6 }],
+      unpaidBillCount: 1,
+      unpaidTotalSatang: 9500,
+    })!;
 
     expect(messages).toHaveLength(1);
     expect(messageText(messages[0]!)).toContain("มีนัด");
@@ -102,7 +107,7 @@ describe("เนื้อหาของสรุป", () => {
   });
 
   it("ไม่มีปุ่ม เพราะเป็นผลลัพธ์ ไม่ใช่คำถาม (spec §23)", () => {
-    expect(hasButtons(buildDigest({ ...empty, game, joinedCount: 6 }, TODAY)![0]!)).toBe(false);
+    expect(hasButtons(buildDigest({ ...empty, games: [{ game, joinedCount: 6 }] })![0]!)).toBe(false);
   });
 });
 
@@ -113,10 +118,12 @@ describe("เนื้อหาของสรุป", () => {
 describe("ห้ามมีชื่อคนค้างจ่ายหลุดออกมา", () => {
   it("ข้อความมีแต่ตัวเลข ไม่มีรายชื่อ", () => {
     const body = messageText(
-      buildDigest(
-        { ...empty, game, joinedCount: 6, unpaidBillCount: 1, unpaidTotalSatang: 50700 },
-        TODAY,
-      )![0]!,
+      buildDigest({
+        ...empty,
+        games: [{ game, joinedCount: 6 }],
+        unpaidBillCount: 1,
+        unpaidTotalSatang: 50700,
+      })![0]!,
     );
 
     for (const name of ["เชวง", "Bank", "ฮก", "กิ้ฟ"]) {

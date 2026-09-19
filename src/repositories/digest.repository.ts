@@ -10,16 +10,15 @@ import type { GameRow } from "./types";
 
 export type GroupDigestData = {
   lineGroupId: string;
-  /** รอบที่ยังเปิดอยู่ มีได้ไม่เกินหนึ่งรอบต่อกลุ่ม (spec §7) */
-  game: GameRow | null;
-  joinedCount: number;
+  /** รอบที่ยังเปิดอยู่ เรียงตามวันเล่น กลุ่มเปิดพร้อมกันได้หลายรอบ (PRP multi-open-rounds) */
+  games: { game: GameRow; joinedCount: number }[];
   unpaidBillCount: number;
   unpaidTotalSatang: number;
 };
 
 type OpenGameRow = GameRow & { joined_count: number };
 
-async function listOpenGames(sql: Queryable): Promise<OpenGameRow[]> {
+async function listAllOpenGames(sql: Queryable): Promise<OpenGameRow[]> {
   return sql<OpenGameRow[]>`
     SELECT g.id,
            g.line_group_id,
@@ -41,6 +40,7 @@ async function listOpenGames(sql: Queryable): Promise<OpenGameRow[]> {
            ) AS joined_count
     FROM games g
     WHERE g.status = 'open'
+    ORDER BY g.line_group_id, g.play_date, g.start_time, g.id
   `;
 }
 
@@ -75,7 +75,7 @@ export async function collectDigestData(
   // อ่านทีละ query ไม่ใช้ Promise.all
   // pool ตั้ง max: 1 อยู่แล้ว สอง query จึงวิ่งบน connection เดียวกันและถูก serialize อยู่ดี
   // Promise.all ให้แค่ pipelining ที่ไม่ได้ประโยชน์ แลกกับความเปราะ (งานนี้ทำสัปดาห์ละครั้ง)
-  const games = await listOpenGames(sql);
+  const games = await listAllOpenGames(sql);
   const unpaid = await listUnpaidBills(sql);
 
   const byGroup = new Map<string, GroupDigestData>();
@@ -85,8 +85,7 @@ export async function collectDigestData(
 
     const created: GroupDigestData = {
       lineGroupId,
-      game: null,
-      joinedCount: 0,
+      games: [],
       unpaidBillCount: 0,
       unpaidTotalSatang: 0,
     };
@@ -96,9 +95,7 @@ export async function collectDigestData(
 
   for (const row of games) {
     const { joined_count, ...game } = row;
-    const entry = ensure(game.line_group_id);
-    entry.game = game;
-    entry.joinedCount = joined_count;
+    ensure(game.line_group_id).games.push({ game, joinedCount: joined_count });
   }
 
   for (const row of unpaid) {

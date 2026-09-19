@@ -7,7 +7,10 @@ export type PendingActionType =
   | "close_game"
   | "create_bill"
   | "cancel_bill"
-  | "edit_bill";
+  | "edit_bill"
+  | "leave_players"
+  // การ์ด "รอบไหน?" ตอนกลุ่มเปิดหลายรอบ (PRP multi-open-rounds §4.3)
+  | "choose_game";
 
 /** payload เก็บลง jsonb จึงรับได้เฉพาะค่าที่แปลงเป็น JSON ได้ */
 export type PendingPayloadValue =

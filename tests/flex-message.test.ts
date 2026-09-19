@@ -33,6 +33,7 @@ import {
   helpMenu,
   playerList,
   unpaidList,
+  whichRound,
 } from "@/line/messages";
 import type { BillRow, BillShareRow, GameRow } from "@/repositories/types";
 import { planBillEdit } from "@/services/bill.service";
@@ -117,6 +118,8 @@ const NAMES = new Map(payers.map((payer) => [payer.user_id, payer.display_name])
 
 /** การ์ดคำถามและเมนูที่มีปุ่ม ตรวจโครงสร้างร่วมกับการ์ดชุดบน */
 const QUESTION_CARDS: [string, LineMessage][] = [
+  ["ถามรอบไหน", whichRound(PENDING_ID, "leave", [game, { ...game, id: "2", court_name: null }])],
+  ["ถามรอบไหน พร้อมรายชื่อ", whichRound(PENDING_ID, "join_for", [game, { ...game, id: "2" }], ["กิ้ฟ", "วิท"])],
   ["ถามจำนวนคอร์ท", askCourtCount(PENDING_ID)],
   ["ถามวันและเวลา", askWhen(PENDING_ID)],
   ["ถามวัน", askDate(PENDING_ID)],
@@ -139,18 +142,24 @@ const QUESTION_CARDS: [string, LineMessage][] = [
   [
     "สรุปประจำสัปดาห์",
     digestCard({
-      game: { playDate: "2026-09-16", startTime: "19:00", durationMinutes: 120, courtName: "ABC", joined: 5, max: 8 },
-      gameIsOverdue: true,
+      games: [
+        { playDate: "2026-09-16", startTime: "19:00", durationMinutes: 120, courtName: "ABC", joined: 5, max: 8 },
+        { playDate: "2026-09-19", startTime: "18:00", durationMinutes: 120, courtName: null, joined: 0, max: 8 },
+      ],
       unpaidBillCount: 2,
       unpaidTotalSatang: 70000,
     }),
   ],
-  ["คิดเงินอะไรดี ครบทุกทาง", billMenu(PENDING_ID, { game, gameBlocked: null, editableBills: [bill] })],
+  ["คิดเงินอะไรดี ครบทุกทาง", billMenu(PENDING_ID, { games: [game], gameBlocked: null, editableBills: [bill] })],
+  [
+    "คิดเงินอะไรดี คิดค่ารอบได้หลายรอบ",
+    billMenu(PENDING_ID, { games: [game, { ...game, id: "2" }], gameBlocked: null, editableBills: [] }),
+  ],
   [
     "คิดเงินอะไรดี คิดค่ารอบไม่ได้",
-    billMenu(PENDING_ID, { game: null, gameBlocked: { game, reason: "no_players" }, editableBills: [bill] }),
+    billMenu(PENDING_ID, { games: [], gameBlocked: { game, reason: "no_players" }, editableBills: [bill] }),
   ],
-  ["คิดเงินอะไรดี ไม่มีรอบและไม่มีบิล", billMenu(PENDING_ID, { game: null, gameBlocked: null, editableBills: [] })],
+  ["คิดเงินอะไรดี ไม่มีรอบและไม่มีบิล", billMenu(PENDING_ID, { games: [], gameBlocked: null, editableBills: [] })],
   ["เลือกบิลที่จะแก้", askWhichBillToEdit(PENDING_ID, [bill, bareBill])],
   ["แก้บิล ยังไม่ได้แก้อะไร", editBillCard(PENDING_ID, bill, planBillEdit(bill, items, mixedShares, NO_EDIT), NAMES)],
   ["แก้บิล เพิ่มและลบรายการ", editBillCard(PENDING_ID, bill, planBillEdit(bill, items, mixedShares, EDIT), NAMES)],

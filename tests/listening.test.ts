@@ -53,7 +53,7 @@ describe("isIgnoreReply", () => {
 });
 
 describe("system prompt", () => {
-  const base = { displayName: "สมชาย", openGame: null };
+  const base = { displayName: "สมชาย", openGames: [] };
 
   it("ไม่ส่งกติกาโหมดฟังไปเปลือง token ตอนมี wake word", () => {
     expect(buildSystemPrompt(base)).not.toContain(IGNORE_SENTINEL);

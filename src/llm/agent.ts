@@ -4,8 +4,6 @@ import { MAX_TOOL_LOOPS } from "@/lib/gemini";
 import { MAX_REPLY_MESSAGES, type LineMessage } from "@/lib/line";
 import { formatErrorForLog } from "@/lib/log";
 import { fallbackMenu, text } from "@/line/messages";
-import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
-import { findPlayerStatus } from "@/repositories/player.repository";
 import {
   loadSessionMessages,
   saveSessionMessages,
@@ -13,6 +11,7 @@ import {
 } from "@/repositories/session.repository";
 import type { LineUserRow } from "@/repositories/types";
 import { findBillContext } from "@/services/bill.service";
+import { hasJoined, loadOpenRounds } from "@/services/round.service";
 import { buildSystemPrompt, isIgnoreReply } from "./system-prompt";
 import { executeTool, type ToolContext } from "./tool-executor";
 import { toolDeclarations } from "./tools";
@@ -54,21 +53,16 @@ function toContents(history: SessionMessage[], userText: string): Content[] {
   ];
 }
 
-async function buildGameContext(lineGroupId: string, user: LineUserRow) {
-  const game = await findOpenGame(lineGroupId);
-  if (!game) return null;
+/** ทุกรอบที่เปิดอยู่ พร้อมบอกว่าคนที่คุยด้วยเปิดรอบไหนและลงรอบไหน (PRP multi-open-rounds §6) */
+async function buildRoundsContext(lineGroupId: string, user: LineUserRow) {
+  const rounds = await loadOpenRounds(lineGroupId);
 
-  const [joinedCount, status] = await Promise.all([
-    countJoinedPlayers(game.id),
-    findPlayerStatus(game.id, user.id),
-  ]);
-
-  return {
-    game,
-    joinedCount,
-    isCreator: game.created_by === user.id,
-    hasJoined: status === "joined",
-  };
+  return rounds.map((round) => ({
+    game: round.game,
+    joinedCount: round.players.length,
+    isCreator: round.game.created_by === user.id,
+    hasJoined: hasJoined(round, user.id),
+  }));
 }
 
 /**
@@ -88,15 +82,15 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
   const attachments: LineMessage[] = [];
 
   try {
-    const [history, openGame, openBill] = await Promise.all([
+    const [history, openGames, openBill] = await Promise.all([
       loadSessionMessages(input.lineGroupId, input.lineUserId),
-      buildGameContext(input.lineGroupId, input.user),
+      buildRoundsContext(input.lineGroupId, input.user),
       findBillContext(input.lineGroupId, input.user.id),
     ]);
 
     const systemInstruction = buildSystemPrompt({
       displayName: input.user.display_name,
-      openGame,
+      openGames,
       openBill,
       ...(input.now ? { now: input.now } : {}),
       ...(input.listening ? { listening: true } : {}),
@@ -105,6 +99,7 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
 
     const contents = toContents(history, userText);
     let replyText = "";
+    let systemReply = false;
 
     for (let loop = 0; loop < MAX_TOOL_LOOPS; loop += 1) {
       const turn = await input.client.generate({
@@ -130,6 +125,7 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
       for (const call of turn.calls) {
         const outcome = await executeTool(call.name, call.args, toolContext);
         attachments.push(...outcome.messages);
+        if (outcome.systemReply) systemReply = true;
         outcomes.push({ name: call.name, response: outcome.result });
       }
 
@@ -152,6 +148,14 @@ export async function runAgent(input: AgentInput): Promise<AgentReply> {
 
     // ไม่มีทั้งข้อความและปุ่ม แปลว่าไปไม่สุด เช่น วน tool ครบแล้วยังไม่ได้คำตอบ
     if (!replyText && attachments.length === 0) return giveUp(input);
+
+    // ลงชื่อ ถอนชื่อ จ่ายเงิน ตอบด้วยข้อความของระบบอย่างเดียว LLM จะได้พูดว่าทำแล้วเองไม่ได้
+    // จำข้อความของระบบไว้เป็นคำตอบของบอท ถ้าบอทถามว่าบิลไหน ข้อความถัดไปจะได้ต่อเรื่องถูก
+    if (systemReply) {
+      const spoken = attachments.map((message) => (message.type === "text" ? message.text : message.altText));
+      await rememberTurn(input, history, userText, spoken.join("\n"));
+      return { messages: buildReply("", attachments) };
+    }
 
     await rememberTurn(input, history, userText, replyText);
     return { messages: buildReply(replyText, attachments) };

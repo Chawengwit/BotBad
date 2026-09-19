@@ -57,6 +57,7 @@ Postback ไม่เรียก LLM เด็ดขาด
 8. ได้ข้อความสุดท้ายจาก Gemini
 9. บันทึก session (ข้อความ user + ข้อความ bot)
 10. App reply LINE: [ข้อความจาก LLM] + [UI attachment ถ้ามี]
+    ยกเว้นมีการเรียก join_game / leave_game / mark_my_payment → ส่งเฉพาะข้อความของระบบ (§8)
 ```
 
 ## Limits
@@ -114,7 +115,7 @@ Postback ไม่เรียก LLM เด็ดขาด
 4. สรุปผลจาก tool เป็นภาษาไทยที่สั้นและเข้าใจง่าย
 
 ## กติกาของกลุ่ม
-- 1 กลุ่มมีรอบที่เปิดอยู่ได้ครั้งละ 1 รอบ
+- เปิดรอบพร้อมกันได้ไม่เกิน 3 รอบ รอบที่เลยวันเล่นแล้วระบบปิดให้เองทุกเช้า
 - จองได้ 1-4 คอร์ท ค่าปกติคอร์ทละ 8 คน ปรับได้ 2-64 คน
 - ทุกรอบต้องมีชื่อคอร์ท ส่วนลิงก์แผนที่จะมีหรือไม่มีก็ได้
 - ทุกคนเล่นเต็มเวลาของรอบ
@@ -143,6 +144,8 @@ R2. ถ้าถามนอกเรื่อง ให้ปฏิเสธส
 R3. ห้ามเดาหรือแต่งข้อมูลรอบตี จำนวนคน หรือรายชื่อ ต้องได้จาก tool หรือ "ข้อมูลปัจจุบัน" เท่านั้น
 R4. ถ้าข้อมูลที่ tool ต้องการยังไม่ครบ ให้ถามผู้ใช้ อย่าเดาค่าเอง
 R5. ห้ามบอกว่าทำสำเร็จ ถ้า tool คืน ok: false ให้อธิบายเหตุผลตาม error
+R5.1 ลงชื่อ ถอนชื่อ และบันทึกว่าจ่ายแล้ว ต้องเรียก tool เท่านั้น ระบบจะแจ้งผลในแชทเอง ห้ามพิมพ์เองว่าทำให้แล้ว
+     ข้อความที่ฟังเหมือนพูดเล่น เช่น "ยังไม่ให้ X ตีแบด 555" ให้ถามก่อนว่าจะให้ทำจริงไหม
 R6. เมื่อ tool propose_* สำเร็จ ให้บอกว่า "กดปุ่มยืนยันด้านล่างได้เลย" ห้ามบอกว่าเสร็จแล้ว
 
 ### วันและเวลา
@@ -210,8 +213,11 @@ R24. propose_create_bill คืน status "awaiting_promptpay" แปลว่�
 
 ## หลักการ
 
-- ทุก tool ทำกับ **รอบ open ของกลุ่มที่ส่งข้อความ** เท่านั้น
+- ทุก tool ทำกับ **รอบ open ของกลุ่มที่ส่งข้อความ** เท่านั้น (คิดค่ารอบรวมรอบที่ปิดไปไม่เกิน 7 วัน)
 - ไม่มี tool ไหนรับ `user_id`, `group_id`, `game_id`
+- กลุ่มเปิดได้หลายรอบ (PRP multi-open-rounds §6) tool ที่ทำกับรอบรับ `round_date` / `round_time` (ไม่บังคับ)
+  ใส่เมื่อผู้ใช้พูดถึงวันหรือเวลาของรอบ ไม่ได้พูดถึงหรือยังกำกวม ระบบเลือกรอบตามกติกา spec §7 หรือขึ้นการ์ด "รอบไหน?" เอง
+  ชื่อไม่ใช้ `play_date` / `start_time` เพราะ `propose_edit_game` ใช้ชื่อนั้นเป็นค่าใหม่ของรอบอยู่แล้ว
 - Tool ที่ไม่รู้จัก → `INVALID_TOOL`
 - Args ไม่ผ่าน zod → `INVALID_ARGUMENT` (ส่งกลับให้ LLM แก้ได้ในรอบถัดไป)
 
@@ -219,18 +225,18 @@ R24. propose_create_bill คืน status "awaiting_promptpay" แปลว่�
 
 | Tool | ประเภท | Params | ผล |
 |---|---|---|---|
-| `get_open_game` | อ่าน | – | ข้อมูลรอบ open |
-| `list_players` | อ่าน | – | รายชื่อผู้เล่น |
-| `join_game` | เขียนทันที | `names?` | ลงชื่อคนที่พิมพ์ หรือคนที่ระบุชื่อมา (รวมแขกใหม่) |
-| `leave_game` | เขียนทันที | `names?` | ถอนชื่อคนที่พิมพ์ หรือคนที่ระบุ (ตรวจสิทธิ์ให้) |
+| `get_open_games` | อ่าน | – | ทุกรอบที่เปิดอยู่ |
+| `list_players` | อ่าน | `round_date?`, `round_time?` | รายชื่อผู้เล่น ไม่ระบุได้ทุกรอบ |
+| `join_game` | เขียนทันที | `names?`, `round_date?`, `round_time?` | ลงชื่อคนที่พิมพ์ หรือคนที่ระบุชื่อมา (รวมแขกใหม่) |
+| `leave_game` | เขียนทันที / ขอยืนยัน | `names?`, `round_date?`, `round_time?` | ถอนตัวเองถอนเลย ถอนคนอื่นขึ้นการ์ดยืนยันก่อน (`leave_players`) เช็กรายชื่อรอบและสิทธิ์ให้ ถ้าเขาอยู่หลายรอบถามรอบก่อน กดเลือกรอบแล้วถอนเลย |
 | `get_bill` | อ่าน | `bill_title?` | บิลของกลุ่ม ยอดรายคน ใครจ่ายแล้ว/ยังไม่จ่าย |
-| `start_bill` | ถาม | `kind?` (`game` / `new` / `edit`), `title?` | ยังไม่รู้รายการ: การ์ด "คิดเงินอะไรดี?" หรือเริ่มทางที่ระบุ ทางเดียวกับคำสั่ง `คิดเงิน` |
-| `propose_create_bill` | ขอยืนยัน | `court_fee?`, `shuttle_count?`, `shuttle_price?`, `other_items?`, `title?`, `payers?`, `promptpay?` | สร้าง pending action บิลลอย ๆ ที่ไม่มีเลขพร้อมเพย์ได้คำถามเลขก่อน (`awaiting_promptpay`) |
+| `start_bill` | ถาม | `kind?` (`game` / `new` / `edit`), `title?`, `round_date?`, `round_time?` | ยังไม่รู้รายการ: การ์ด "คิดเงินอะไรดี?" หรือเริ่มทางที่ระบุ ทางเดียวกับคำสั่ง `คิดเงิน` |
+| `propose_create_bill` | ขอยืนยัน | `court_fee?`, `shuttle_count?`, `shuttle_price?`, `other_items?`, `title?`, `payers?`, `promptpay?`, `round_date?`, `round_time?` | สร้าง pending action บิลลอย ๆ ที่ไม่มีเลขพร้อมเพย์ได้คำถามเลขก่อน (`awaiting_promptpay`) บิลค่ารอบที่มีหลายเกมให้เลือก ถามรอบก่อนแล้วจำรายการไว้ในการ์ด |
 | `mark_my_payment` | เขียนทันที | `paid`, `names?`, `bill_title?` | บันทึกการจ่ายของตัวเองหรือของคนที่ระบุ |
 | `propose_create_game` | ขอยืนยัน | `court_count?`, `max_players?`, `play_date?`, `start_time?`, `duration_minutes?`, `court_name?`, `location_url?`, `promptpay?` | `MISSING_FIELDS` หรือสร้าง pending action |
-| `propose_edit_game` | ขอยืนยัน | ช่องเดียวกัน (optional ทั้งหมด) | สร้าง pending action |
-| `propose_cancel_game` | ขอยืนยัน | – | สร้าง pending action |
-| `propose_close_game` | ขอยืนยัน | – | สร้าง pending action |
+| `propose_edit_game` | ขอยืนยัน | ช่องเดียวกัน (optional ทั้งหมด) + `round_date?`, `round_time?` | สร้าง pending action ต้องถามรอบก่อนก็จำค่าที่เสนอไว้ในการ์ด |
+| `propose_cancel_game` | ขอยืนยัน | `round_date?`, `round_time?` | สร้าง pending action |
+| `propose_close_game` | ขอยืนยัน | `round_date?`, `round_time?` | สร้าง pending action |
 
 ## Declaration (TypeScript)
 
@@ -277,9 +283,9 @@ const gameFields = {
 
 export const toolDeclarations: FunctionDeclaration[] = [
   {
-    name: "get_open_game",
+    name: "get_open_games",
     description:
-      "ดูรอบตีที่เปิดอยู่ของกลุ่มนี้ ได้วัน เวลา จำนวนคอร์ท จำนวนคนที่ลงชื่อ และผู้สร้าง ใช้เมื่อผู้ใช้ถามว่ามีรอบไหม เต็มหรือยัง กี่โมง",
+      "ดูทุกรอบตีที่เปิดอยู่ของกลุ่มนี้ ได้วัน เวลา จำนวนคอร์ท จำนวนคนที่ลงชื่อ และผู้สร้างของแต่ละรอบ ใช้เมื่อผู้ใช้ถามว่ามีรอบไหม เต็มหรือยัง กี่โมง",
   },
   {
     name: "list_players",
@@ -345,7 +351,7 @@ const gameFields = z
 const noArgs = z.object({}).strict();
 
 export const toolSchemas = {
-  get_open_game: noArgs,
+  get_open_games: noArgs,
   list_players: noArgs,
   join_game: noArgs,
   leave_game: noArgs,
@@ -380,11 +386,11 @@ type ToolResult =
 
 | Code | ใช้เมื่อ | ข้อมูลเพิ่ม |
 |---|---|---|
-| `NO_OPEN_GAME` | ไม่มีรอบ open | – |
-| `GAME_ALREADY_OPEN` | สร้างรอบตอนมีรอบ open | `open_game` |
-| `ALREADY_JOINED` | ลงชื่อซ้ำ | – |
-| `NOT_JOINED` | ถอนชื่อทั้งที่ไม่ได้ลง | – |
-| `GAME_FULL` | รอบเต็ม | `current_players`, `max_players` |
+| `NO_OPEN_GAME` | ไม่มีรอบ open หรือไม่มีรอบตรงกับ `round_date` / `round_time` ที่ส่งมา | `round_date`, `round_time` |
+| `GAME_LIMIT_REACHED` | สร้างรอบตอนกลุ่มเปิดครบ 3 รอบแล้ว | `games` |
+| `ALREADY_JOINED` | ลงชื่อซ้ำ | `all_rounds` เมื่อลงครบทุกรอบแล้ว, `names` |
+| `NOT_JOINED` | ถอนชื่อทั้งที่ไม่ได้ลง | `all_rounds` เมื่อไม่ได้ลงรอบไหนเลย |
+| `GAME_FULL` | รอบเต็ม | `current_players`, `max_players` หรือ `all_rounds` เมื่อรอบที่เหลือเต็มหมด |
 | `NOT_GAME_CREATOR` | ไม่ใช่ผู้สร้าง | `creator_name` |
 | `COURT_TOO_SMALL` | ลดคอร์ทแล้วคนเกิน | `current_players`, `new_court_count`, `new_max_players` |
 | `MAX_PLAYERS_TOO_SMALL` | ลดจำนวนคนต่ำกว่าคนที่ลงชื่อแล้ว | `current_players`, `new_max_players` |
@@ -396,32 +402,42 @@ type ToolResult =
 | `NOT_YOUR_GUEST` | ถอนชื่อคนที่ตัวเองไม่ได้ลงให้ | – |
 | `PERSON_NOT_FOUND` | ชื่อที่ให้มาไม่รู้จักในกลุ่มนี้ | `names` |
 | `PERSON_AMBIGUOUS` | ชื่อซ้ำกันหลายคน | `names` |
-| `BILL_AMBIGUOUS` | กลุ่มมีบิลเปิดหลายใบแต่ไม่ได้ระบุชื่อ | `titles` |
+| `BILL_AMBIGUOUS` | ไม่ได้ระบุชื่อ และมีหลายใบที่คำสั่งนี้ทำได้ | `titles` (เฉพาะใบที่เลือกได้) |
 | `BILL_TITLE_TAKEN` | ชื่อบิลซ้ำกับใบที่เปิดอยู่ | `title` |
+| `NOTHING_OWED` | `mark_my_payment` จ่ายแล้ว แต่คนเหล่านี้ไม่ค้างบิลไหนเลย | `names` |
+| `NOTHING_PAID` | `mark_my_payment` ยังไม่จ่าย แต่ไม่มีบิลไหนบันทึกว่าคนเหล่านี้จ่ายแล้ว | `names` |
+| `ALL_BILLS_SETTLED` | `get_bill` ไม่ระบุชื่อ และทุกบิลที่เปิดอยู่จ่ายครบแล้ว | `titles` |
 | `INTERNAL_ERROR` | error อื่น ๆ | – (ห้ามส่ง stack trace) |
 
 ## ตัวอย่างผลสำเร็จ
 
-`get_open_game`:
+`get_open_games`:
 
 ```json
 {
   "ok": true,
   "data": {
-    "play_date": "2026-09-16",
-    "weekday": "พุธ",
-    "start_time": "19:00",
-    "end_time": "21:00",
-    "court_count": 1,
-    "current_players": 5,
-    "max_players": 8,
-    "is_full": false,
-    "creator_name": "Bank",
-    "requester_is_creator": false,
-    "requester_joined": true
+    "rounds": [
+      {
+        "play_date": "2026-09-16",
+        "weekday": "พุธ",
+        "start_time": "19:00",
+        "end_time": "21:00",
+        "court_count": 1,
+        "court_name": "ABC Badminton",
+        "current_players": 5,
+        "max_players": 8,
+        "is_full": false,
+        "requester_is_creator": false,
+        "requester_joined": true
+      }
+    ]
   }
 }
 ```
+
+tool ที่ระบบต้องถามว่ารอบไหน คืน `{ "ok": true, "data": { "status": "choose_round" } }`
+พร้อมการ์ด "รอบไหน?" เป็นข้อความของระบบ (§8)
 
 `join_game`:
 
@@ -451,18 +467,26 @@ type ToolResult =
 
 Tool Executor เก็บ UI ไว้ฝั่ง App ระหว่าง loop แล้วแนบท้ายข้อความของ LLM
 
+**ยกเว้น `join_game` / `leave_game` / `mark_my_payment`** และ **ทุก tool ที่ระบบต้องถามว่ารอบไหน**
+ข้อความของระบบคือคำตอบทั้งหมด ไม่ส่งข้อความของ LLM
+ทั้งตอนสำเร็จ และตอนไม่สำเร็จ (ได้ข้อความ error แบบเดียวกับคำสั่งพิมพ์)
+เคยเกิดจริง 2026-09-18: tool ไม่สำเร็จ ไม่มีอะไรแนบ แชทจึงเหลือแค่ข้อความที่ LLM แต่งว่า "ถอนชื่อ louis ออกจากรอบให้แล้วครับ 👍"
+ข้อความของระบบถูกจำเป็นคำตอบของบอทใน session ด้วย บอทถามว่าบิลไหนแล้วคนตอบชื่อบิลมา LLM จะต่อเรื่องถูก
+
 | Tool สำเร็จ | แนบ |
 |---|---|
 | `join_game` / `leave_game` | ข้อความสั้น `✅ เชวง ลงชื่อแล้ว` + จำนวนคนล่าสุด (ไม่มีปุ่ม) |
 | `join_game` / `leave_game` ที่มี `names` | บอกว่าใครทำให้ใคร และใครถูกเพิ่มเป็นแขกใหม่ |
-| `list_players` | รายชื่อผู้เล่น (ไม่มีปุ่ม) |
+| `leave_game` ที่ถอนคนอื่น | การ์ดยืนยัน + ปุ่ม `confirm` / `reject` เฉพาะคนที่ถอนได้จริง คนที่ไม่อยู่ในรายชื่อบอกไว้ใต้รายชื่อ |
+| `list_players` | รายชื่อผู้เล่น รอบละใบ (ไม่มีปุ่ม) |
+| tool ใดก็ตามที่ต้องถามว่ารอบไหน | การ์ด "รอบไหน?" ปุ่มละรอบ + ยกเลิก (spec §7) จำคำถามไว้ใน session ผู้ใช้พิมพ์ตอบเป็นวันได้ |
 | `get_bill` | การ์ดบิล (ไม่มีปุ่ม) |
 | `mark_my_payment` | ข้อความยืนยันการบันทึก (ไม่มีปุ่ม) |
 | `start_bill` | การ์ด "คิดเงินอะไรดี?" หรือคำถามของทางที่เลือก (ปุ่มแบบเดียวกับคำสั่ง `คิดเงิน`) |
 | `propose_*` | การ์ดยืนยัน + ปุ่ม `confirm` / `reject` พร้อม `pending_id` |
 
 ทางปุ่ม-คำสั่ง (`src/router/`) กับทาง tool ต้องตอบเหมือนกันเสมอ
-มีแต่ `propose_*` กับ `start_bill` ที่แนบปุ่มได้ เพราะเป็นการขอให้กดยืนยันหรือกำลังถาม (spec §23)
+มีแต่ `propose_*`, `start_bill` และ `leave_game` ที่ถอนคนอื่น ที่แนบปุ่มได้ เพราะเป็นการขอให้กดยืนยันหรือกำลังถาม (spec §23)
 
 ลำดับ reply:
 
@@ -611,7 +635,7 @@ Bot:   ✅ ลงชื่อให้แล้ว ตอนนี้ 6/8 คน
 ```text
 User:  บอทจ๋า รอบพรุ่งนี้คนเต็มหรือยัง
 
-LLM →  get_open_game {}
+LLM →  get_open_games {}
 Tool → { ok: true, data: { current_players: 7, max_players: 8, is_full: false, ... } }
 
 Bot:   ยังไม่เต็มนะ ตอนนี้ 7/8 คน เหลืออีก 1 ที่ 🏸
@@ -695,7 +719,9 @@ Bot:   เรียบร้อย กดปุ่มยืนยันด้า
 
 - Tool schema: args ถูก / ผิด / มี field เกิน
 - Tool executor: tool ไม่รู้จัก, loop เกิน 3 รอบ
-- `propose_create_game`: `MISSING_FIELDS`, `GAME_ALREADY_OPEN`, `DATE_IN_PAST`
+- `propose_create_game`: `MISSING_FIELDS`, `GAME_LIMIT_REACHED`, `DATE_IN_PAST`
+- เลือกรอบ: `round_date` / `round_time` เลือกรอบถูก, สองรอบวันเดียวกันระบุแค่วันได้การ์ด "รอบไหน?",
+  ไม่ระบุแล้วกำกวมได้การ์ด "รอบไหน?" เป็นข้อความของระบบ ไม่ใช่ข้อความของ LLM
 - `propose_edit_game`: `NOT_GAME_CREATOR`, `COURT_TOO_SMALL`, `NO_CHANGES`
 - Fallback: mock Gemini 429 / timeout
 - Session: หมดอายุแล้วเริ่มใหม่, ตัดเหลือ 10 ข้อความ

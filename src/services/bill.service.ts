@@ -8,16 +8,18 @@ import {
   insertBill,
   listActiveBills,
   listActiveBillsByGame,
+  listActiveBillsWithPayers,
   listBillItems,
   listBillShares,
   listEditableBills,
   markSharePaid,
   replaceBillItems,
   syncBillShares,
+  type ActiveBill,
   type NewBillItem,
   type NewBillShare,
 } from "@/repositories/bill.repository";
-import { findGameById, findOpenGame } from "@/repositories/game.repository";
+import { findGameById, listBillableGames } from "@/repositories/game.repository";
 import {
   consumePendingAction,
   createPendingAction,
@@ -29,6 +31,7 @@ import {
 import { findAddedBy, listJoinedPlayers } from "@/repositories/player.repository";
 import { formatThaiDate } from "@/lib/time";
 import { parseNames } from "./people.service";
+import { loadRounds, type Round } from "./round.service";
 import type { BillItem, BillItemRow, BillRow, BillShareRow, GameRow, UserRow } from "@/repositories/types";
 
 /**
@@ -199,16 +202,16 @@ export function summarize(shares: BillShareRow[]): BillSummary {
 }
 
 /**
- * รอบที่จะคิดเงินได้ ต้องเป็นรอบที่เปิดอยู่ และคนสั่งต้องเป็นคนเปิดรอบ
- * เช็กให้ครบตั้งแต่ก่อนเริ่มถาม จะได้ไม่ให้ตอบไปห้าคำถามแล้วค่อยบอกว่าทำไม่ได้
+ * เกมที่ยังคิดค่ารอบได้ พร้อมรายชื่อ: ยังเปิดอยู่ หรือปิดไปไม่เกิน 7 วัน (PRP multi-open-rounds §5.1)
+ * การปิดเกมไม่ขวางการคิดเงินอีกต่อไป ทั้งปิดเองและปิดอัตโนมัติ
  */
-async function requireBillableGame(lineGroupId: string, userId: string): Promise<GameRow> {
-  const game = await findOpenGame(lineGroupId);
-  if (!game) throw new AppError("NO_OPEN_GAME");
-  if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
-  if ((await listJoinedPlayers(game.id)).length === 0) throw new AppError("NO_PLAYERS_TO_SPLIT");
+export async function loadBillableRounds(lineGroupId: string): Promise<Round[]> {
+  return loadRounds(await listBillableGames(lineGroupId));
+}
 
-  return game;
+/** คิดค่ารอบได้เฉพาะคนเปิดรอบ และต้องมีคนลงชื่อให้หาร */
+export function canBillRound(round: Round, userId: string): boolean {
+  return round.game.created_by === userId && round.players.length > 0;
 }
 
 /** ชื่อบิลตั้งต้นของรอบตี ถ้าชนกับใบที่เปิดอยู่จะเติมลำดับต่อท้าย */
@@ -224,46 +227,42 @@ async function defaultBillTitle(lineGroupId: string, game: GameRow): Promise<str
 }
 
 /**
- * เริ่ม wizard คิดเงิน (PRP guests-split-bills-and-digest §5)
- *
- * ระบุชื่อบิลมา = บิลลอย ๆ ที่ไม่ผูกกับรอบตี ใครในกลุ่มก็สร้างได้
- * ไม่ระบุ = บิลของรอบที่เปิดอยู่ เฉพาะคนเปิดรอบเท่านั้น
+ * บิลลอย ๆ ที่ไม่ผูกกับรอบตี ใครในกลุ่มก็สร้างได้ (PRP guests-split-bills-and-digest §5)
+ * ชื่อต้องไม่ซ้ำกับบิลที่ยังเปิดอยู่ของกลุ่ม ส่วนบิลค่ารอบใช้ startGameBill
  */
 export async function startCreateBill(
   lineGroupId: string,
   userId: string,
-  title = "",
-): Promise<{ pending: PendingActionRow; game: GameRow | null; title: string }> {
-  const wanted = title.trim();
-  return wanted ? startStandaloneBill(lineGroupId, userId, wanted) : startGameBill(lineGroupId, userId);
-}
-
-/** บิลลอย ๆ ชื่อต้องไม่ซ้ำกับบิลที่ยังเปิดอยู่ของกลุ่ม */
-async function startStandaloneBill(
-  lineGroupId: string,
-  userId: string,
   title: string,
-): Promise<{ pending: PendingActionRow; game: null; title: string }> {
-  await requireFreeTitle(lineGroupId, title);
+): Promise<{ pending: PendingActionRow; title: string }> {
+  const wanted = title.trim();
+  await requireFreeTitle(lineGroupId, wanted);
 
   return {
-    game: null,
-    title,
+    title: wanted,
     pending: await createPendingAction({
       lineGroupId,
       requestedBy: userId,
       actionType: "create_bill",
-      payload: { title },
+      payload: { title: wanted },
     }),
   };
 }
 
-/** บิลค่ารอบที่เปิดอยู่ ชื่อตั้งให้เอง */
+/**
+ * บิลค่ารอบของเกมที่เลือก ชื่อตั้งให้เอง
+ * เช็กให้ครบตั้งแต่ก่อนเริ่มถาม จะได้ไม่ให้ตอบไปห้าคำถามแล้วค่อยบอกว่าทำไม่ได้
+ */
 export async function startGameBill(
   lineGroupId: string,
   userId: string,
+  gameId: string,
 ): Promise<{ pending: PendingActionRow; game: GameRow; title: string }> {
-  const game = await requireBillableGame(lineGroupId, userId);
+  const game = (await listBillableGames(lineGroupId)).find((candidate) => candidate.id === gameId);
+  if (!game) throw new AppError("NO_OPEN_GAME");
+  if (game.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
+  if ((await listJoinedPlayers(game.id)).length === 0) throw new AppError("NO_PLAYERS_TO_SPLIT");
+
   const autoTitle = await defaultBillTitle(lineGroupId, game);
 
   return {
@@ -285,13 +284,13 @@ export async function requireFreeTitle(lineGroupId: string, title: string): Prom
   }
 }
 
-/** ทำไมคิดค่ารอบไม่ได้ ทั้งที่มีรอบเปิดอยู่ */
+/** ทำไมคิดค่ารอบไม่ได้ ทั้งที่มีเกมที่ยังคิดค่ารอบได้อยู่ */
 export type GameBillBlock = "not_creator" | "no_players";
 
 export type BillMenuOptions = {
-  /** รอบที่คิดค่ารอบได้ตอนนี้ null = ไม่มีปุ่มคิดค่ารอบ */
-  game: GameRow | null;
-  /** มีรอบเปิดอยู่แต่คิดค่ารอบไม่ได้ บอกเหตุผลใต้คำถาม ไม่ใช่ให้ปุ่มหายไปเฉย ๆ */
+  /** เกมที่คนนี้คิดค่ารอบได้ตอนนี้ ว่าง = ไม่มีปุ่มคิดค่ารอบ */
+  games: GameRow[];
+  /** มีเกมอยู่แต่คิดค่ารอบไม่ได้ บอกเหตุผลใต้คำถาม ไม่ใช่ให้ปุ่มหายไปเฉย ๆ */
   gameBlocked: { game: GameRow; reason: GameBillBlock } | null;
   /** บิลที่คนนี้แก้ได้ (เขาสร้างเอง) */
   editableBills: BillRow[];
@@ -302,19 +301,19 @@ export type BillMenuOptions = {
  * เพราะหลังตีเสร็จคนก็คิดค่ากินข้าวกันด้วย ถ้าเดาผิดต้องตอบค่าคอร์ทไปห้าคำถามถึงจะรู้ตัว
  */
 export async function billMenuOptions(lineGroupId: string, userId: string): Promise<BillMenuOptions> {
-  const [game, editableBills] = await Promise.all([
-    findOpenGame(lineGroupId),
+  const [rounds, editableBills] = await Promise.all([
+    loadBillableRounds(lineGroupId),
     listEditableBills(lineGroupId, userId),
   ]);
 
-  if (!game) return { game: null, gameBlocked: null, editableBills };
-  if (game.created_by !== userId) {
-    return { game: null, gameBlocked: { game, reason: "not_creator" }, editableBills };
-  }
-  if ((await listJoinedPlayers(game.id)).length === 0) {
-    return { game: null, gameBlocked: { game, reason: "no_players" }, editableBills };
-  }
-  return { game, gameBlocked: null, editableBills };
+  const games = rounds.filter((round) => canBillRound(round, userId)).map((round) => round.game);
+  if (games.length > 0) return { games, gameBlocked: null, editableBills };
+
+  const mine = rounds.find((round) => round.game.created_by === userId);
+  if (mine) return { games, gameBlocked: { game: mine.game, reason: "no_players" }, editableBills };
+
+  const other = rounds[0];
+  return { games, gameBlocked: other ? { game: other.game, reason: "not_creator" } : null, editableBills };
 }
 
 /**
@@ -502,9 +501,18 @@ export function attachPayers(
 
 /**
  * เลือกบิลที่คำสั่งนี้หมายถึง (PRP guests-split-bills-and-digest §5.2)
- * กลุ่มมีบิลเปิดพร้อมกันได้หลายใบ ไม่ระบุชื่อตอนมีหลายใบจึงต้องถามกลับ
+ *
+ * ระบุชื่อมา = ใบนั้นเสมอ แม้ทุกคนจะจ่ายครบแล้วก็ตาม
+ * ไม่ระบุ = เลือกเฉพาะใบที่เปิดอยู่และคำสั่งนี้ทำได้ (fits) เช่น "จ่ายแล้ว" ดูเฉพาะใบที่คนนั้นยังค้าง
+ * จะได้ไม่ถามถึงใบที่เขาจ่ายไปแล้ว เหลือใบเดียวใช้เลย หลายใบถามกลับโดยเสนอเฉพาะใบที่เข้าเงื่อนไข
+ * มีบิลเปิดอยู่แต่ไม่มีใบไหนเข้าเงื่อนไข ใช้ error ของคำสั่งนั้น (none) บอกว่าทำไม
  */
-export async function resolveBill(lineGroupId: string, title = ""): Promise<BillRow> {
+export async function resolveBill(
+  lineGroupId: string,
+  title = "",
+  fits: (bill: ActiveBill) => boolean = () => true,
+  none: (open: ActiveBill[]) => AppError = () => new AppError("NO_BILL"),
+): Promise<BillRow> {
   const wanted = title.trim();
 
   if (wanted) {
@@ -513,12 +521,29 @@ export async function resolveBill(lineGroupId: string, title = ""): Promise<Bill
     return found;
   }
 
-  const bills = await listActiveBills(lineGroupId);
-  if (bills.length === 0) throw new AppError("NO_BILL");
-  if (bills.length > 1) {
-    throw new AppError("BILL_AMBIGUOUS", { titles: bills.map((bill) => bill.title) });
+  const open = await listActiveBillsWithPayers(lineGroupId);
+  if (open.length === 0) throw new AppError("NO_BILL");
+
+  const matched = open.filter(fits);
+  if (matched.length === 0) throw none(open);
+  if (matched.length > 1) {
+    throw new AppError("BILL_AMBIGUOUS", { titles: matched.map((bill) => bill.title) });
   }
-  return bills[0]!;
+  return matched[0]!;
+}
+
+/**
+ * บิลที่ขอดู หรือถามว่าใครยังไม่จ่าย
+ * ไม่ระบุชื่อจะข้ามใบที่ทุกคนจ่ายครบแล้ว เพราะถือว่าจบไปแล้ว อยากเปิดดูใบนั้นต้องระบุชื่อมา
+ */
+export async function getBill(lineGroupId: string, title = ""): Promise<BillView> {
+  const bill = await resolveBill(
+    lineGroupId,
+    title,
+    (candidate) => candidate.unpaid_user_ids.length > 0,
+    (open) => new AppError("ALL_BILLS_SETTLED", { titles: open.map((settled) => settled.title) }),
+  );
+  return billView(bill);
 }
 
 /**
@@ -526,9 +551,7 @@ export async function resolveBill(lineGroupId: string, title = ""): Promise<Bill
  * อ่านรอบจาก game_id ของบิลโดยตรง เพราะรอบอาจปิดไปแล้วแต่ยังตามเก็บเงินกันอยู่
  * บิลลอย ๆ ไม่มีรอบเลย ซึ่งไม่ใช่ error
  */
-export async function getBill(lineGroupId: string, title = ""): Promise<BillView> {
-  const bill = await resolveBill(lineGroupId, title);
-
+async function billView(bill: BillRow): Promise<BillView> {
   return {
     bill,
     game: bill.game_id ? await findGameById(bill.game_id) : null,
@@ -585,7 +608,8 @@ export async function startCancelBill(
   userId: string,
   title = "",
 ): Promise<{ pending: PendingActionRow; view: BillView }> {
-  const view = await getBill(lineGroupId, title);
+  // ยกเลิกได้ทุกใบที่เปิดอยู่ รวมใบที่จ่ายครบแล้ว
+  const view = await billView(await resolveBill(lineGroupId, title));
   if (view.bill.created_by !== userId) throw new AppError("NOT_GAME_CREATOR");
 
   return {
@@ -869,12 +893,18 @@ export type PaymentResult = {
   shares: BillShareRow[];
   /** คนที่บันทึกสำเร็จ */
   people: { user: UserRow; amountSatang: number }[];
+  /** คนที่อยู่ในสถานะนั้นอยู่แล้ว เช่นบอกว่าจ่ายแล้วซ้ำ ไม่มีอะไรเปลี่ยน */
+  unchanged: UserRow[];
   /** คนที่ทำไม่ได้ เพราะไม่อยู่ในบิลหรือไม่มีสิทธิ์กดแทน */
   refused: { user: UserRow; reason: "not_in_bill" | "not_allowed" }[];
 };
 
 /**
  * บันทึกว่าจ่ายแล้วหรือยัง ของตัวเองหรือของคนอื่นก็ได้ (PRP §5.6)
+ *
+ * ไม่ระบุชื่อบิล เลือกเฉพาะใบที่มีอะไรให้เปลี่ยน (PRP guests-split-bills-and-digest §5.2)
+ * "จ่ายแล้ว" ดูใบที่คนในคำสั่งยังค้าง ส่วน "ยังไม่จ่าย" ดูใบที่เคยบันทึกว่าจ่ายแล้ว
+ * ซึ่งรวมใบที่จ่ายครบแล้วด้วย ไม่งั้นคนสุดท้ายที่กดผิดจนบิลครบจะย้อนไม่ได้
  *
  * กดแทนได้เมื่อเป็นเจ้าตัว เป็นคนที่พาคนนั้นมาในรอบของบิลนี้ หรือเป็นคนสร้างบิล
  * คนสร้างบิลได้สิทธิ์เพราะเป็นคนรับโอน มีคนจ่ายเงินสดให้ตรง ๆ ได้
@@ -887,9 +917,19 @@ export async function markPayment(
   paid: boolean,
   title = "",
 ): Promise<PaymentResult> {
-  const bill = await resolveBill(lineGroupId, title);
+  const ids = people.map((person) => person.id);
+  const hasSomeoneToChange = (candidate: ActiveBill) => {
+    const toChange = paid ? candidate.unpaid_user_ids : candidate.paid_user_ids;
+    return toChange.some((id) => ids.includes(id));
+  };
+  const nothingToChange = () =>
+    new AppError(paid ? "NOTHING_OWED" : "NOTHING_PAID", {
+      names: people.map((person) => person.display_name),
+    });
+
+  const bill = await resolveBill(lineGroupId, title, hasSomeoneToChange, nothingToChange);
   const before = await listBillShares(bill.id);
-  const result: PaymentResult = { bill, shares: before, people: [], refused: [] };
+  const result: PaymentResult = { bill, shares: before, people: [], unchanged: [], refused: [] };
 
   for (const person of people) {
     const share = before.find((row) => row.user_id === person.id);
@@ -908,7 +948,12 @@ export async function markPayment(
       continue;
     }
 
-    await markSharePaid(bill.id, person.id, paid, paid ? actor.id : null);
+    // อยู่ในสถานะนั้นอยู่แล้วไม่นับว่าเพิ่งเปลี่ยน ยอดในข้อความจะได้ไม่รวมเงินที่บันทึกไปก่อนแล้ว
+    const changed = await markSharePaid(bill.id, person.id, paid, paid ? actor.id : null);
+    if (!changed) {
+      result.unchanged.push(person);
+      continue;
+    }
     result.people.push({ user: person, amountSatang: share.amount_satang });
   }
 

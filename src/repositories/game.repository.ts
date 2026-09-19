@@ -17,12 +17,15 @@ export type NewGame = {
   promptpay?: string | null;
 };
 
-/** รอบที่ยังเปิดอยู่ของกลุ่ม มีได้มากสุด 1 รอบ (spec §7) */
-export async function findOpenGame(
+/**
+ * รอบที่ยังเปิดอยู่ของกลุ่ม เปิดพร้อมกันได้หลายรอบ (PRP multi-open-rounds)
+ * เรียงตามวันเวลาเล่น ปุ่ม "รอบไหน?" กับรายชื่อทุกรอบจะได้เรียงเหมือนกันเสมอ
+ */
+export async function listOpenGames(
   lineGroupId: string,
   sql: Queryable = getSql(),
-): Promise<GameRow | null> {
-  const rows = await sql<GameRow[]>`
+): Promise<GameRow[]> {
+  return sql<GameRow[]>`
     SELECT id,
            line_group_id,
            created_by,
@@ -38,8 +41,37 @@ export async function findOpenGame(
            edit_count
     FROM games
     WHERE line_group_id = ${lineGroupId} AND status = 'open'
+    ORDER BY play_date, start_time, id
   `;
-  return rows[0] ?? null;
+}
+
+/**
+ * เกมที่ยังคิดค่ารอบได้: ยังเปิดอยู่ หรือปิดไปไม่เกิน 7 วัน ไม่รวมเกมที่ยกเลิก (PRP multi-open-rounds §5.1)
+ * เวลาที่ปิดอ่านจาก updated_at เพราะเกมที่ปิดแล้วแก้ไขไม่ได้อีก ค่านี้จึงไม่ขยับหลังปิด
+ */
+export async function listBillableGames(
+  lineGroupId: string,
+  sql: Queryable = getSql(),
+): Promise<GameRow[]> {
+  return sql<GameRow[]>`
+    SELECT id,
+           line_group_id,
+           created_by,
+           to_char(play_date, 'YYYY-MM-DD') AS play_date,
+           to_char(start_time, 'HH24:MI') AS start_time,
+           duration_minutes,
+           court_count,
+           max_players,
+           status,
+           court_name,
+           location_url,
+           promptpay,
+           edit_count
+    FROM games
+    WHERE line_group_id = ${lineGroupId}
+      AND (status = 'open' OR (status = 'completed' AND updated_at > now() - interval '7 days'))
+    ORDER BY play_date, start_time, id
+  `;
 }
 
 /** รอบตีตาม id ใช้กับบิลที่ยังตามเก็บเงินอยู่หลังรอบปิดไปแล้ว */
@@ -213,6 +245,28 @@ export async function updateGameStatus(
   `;
 }
 
+/**
+ * ปิดรอบที่วันเล่นผ่านไปแล้วของทุกกลุ่ม คืนจำนวนรอบที่ปิด (PRP multi-open-rounds §5)
+ * ตั้ง updated_at ด้วย เพราะเป็นเวลาที่ใช้นับ 7 วันที่ยังคิดค่ารอบได้
+ */
+export async function closeOverdueGames(today: string, sql: Queryable = getSql()): Promise<number> {
+  const rows = await sql<{ id: string }[]>`
+    UPDATE games
+    SET status = 'completed', updated_at = now()
+    WHERE status = 'open' AND play_date < ${today}::date
+    RETURNING id
+  `;
+  return rows.length;
+}
+
+/**
+ * ล็อกกลุ่มไว้จนจบทรานแซกชัน ใช้ก่อนนับรอบตอนยืนยันเปิดรอบใหม่ (PRP multi-open-rounds §7)
+ * ไม่มี unique index กันเปิดรอบซ้อนแล้ว ถ้าไม่ล็อก สองคนกดยืนยันพร้อมกันจะนับได้ 2 รอบทั้งคู่แล้วเปิดเป็น 4
+ */
+export async function lockGroup(lineGroupId: string, sql: Queryable): Promise<void> {
+  await sql`SELECT pg_advisory_xact_lock(hashtext(${lineGroupId}))`;
+}
+
 export async function countJoinedPlayers(gameId: string, sql: Queryable = getSql()): Promise<number> {
   const rows = await sql<{ count: number }[]>`
     SELECT COUNT(*)::int AS count
@@ -221,6 +275,3 @@ export async function countJoinedPlayers(gameId: string, sql: Queryable = getSql
   `;
   return rows[0]?.count ?? 0;
 }
-
-/** Postgres คืน code นี้เมื่อชน unique index เช่น เปิดรอบซ้อนในกลุ่มเดียวกัน */
-export const UNIQUE_VIOLATION = "23505";

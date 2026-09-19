@@ -32,14 +32,18 @@ import {
   findGameById,
   findLatestPromptPay,
   findLatestVenue,
-  findOpenGame,
 } from "@/repositories/game.repository";
 import {
   updatePendingPayload,
   type PendingActionRow,
   type PendingPayload,
 } from "@/repositories/pending-action.repository";
-import { editPatchSchema, validatePatch, withDerivedMaxPlayers } from "@/services/game-admin.service";
+import {
+  editPatchSchema,
+  gameOfPending,
+  validatePatch,
+  withDerivedMaxPlayers,
+} from "@/services/game-admin.service";
 import {
   defaultMaxPlayers,
   gameDraftSchema,
@@ -273,15 +277,13 @@ async function previewBill(
   );
 }
 
-/** แก้ไขทีละช่อง เลือกค่าเสร็จก็ไปการ์ดยืนยันเลย */
+/** แก้ไขทีละช่อง เลือกค่าเสร็จก็ไปการ์ดยืนยันเลย แก้รอบที่การ์ดนี้ออกไว้ให้เท่านั้น */
 export async function advanceEditWizard(
-  pendingId: string,
-  lineGroupId: string,
+  pending: PendingActionRow,
   field: string,
   value: number | string,
 ): Promise<LineMessage[]> {
-  const game = await findOpenGame(lineGroupId);
-  if (!game) throw new AppError("NO_OPEN_GAME");
+  const game = await gameOfPending(pending);
 
   // เปลี่ยนจำนวนคอร์ทอาจกระทบจำนวนคนที่รับ ต้องคิดให้ครบก่อนเอาไปแสดงบนการ์ด
   const patch = withDerivedMaxPlayers(game, editPatchSchema.parse({ [field]: value }));
@@ -289,8 +291,8 @@ export async function advanceEditWizard(
   // ตรวจตั้งแต่ตอนนี้ จะได้ไม่ให้กดยืนยันไปแล้วค่อยบอกว่าไม่ได้
   validatePatch(game, patch, await countJoinedPlayers(game.id));
 
-  await save(pendingId, { ...(patch as PendingPayload), awaiting: null });
-  return [confirmEditGame(pendingId, game, patch)];
+  await save(pending.id, { ...(patch as PendingPayload), awaiting: null });
+  return [confirmEditGame(pending.id, game, patch)];
 }
 
 async function save(pendingId: string, patch: PendingPayload): Promise<void> {

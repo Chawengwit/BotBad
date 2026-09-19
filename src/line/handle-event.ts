@@ -7,6 +7,7 @@ import {
   closeListeningWindow,
   isListening,
   openListeningWindow,
+  saveSessionMessages,
   setListeningWindow,
 } from "@/repositories/session.repository";
 import type { LineMessage } from "@/lib/line";
@@ -25,7 +26,7 @@ import {
 import { handleTextAnswer } from "@/router/text-answer";
 import { hasWakeWord, WAKE_WORD } from "@/router/wake-word";
 import { ensureUser } from "@/services/user.service";
-import { errorMessage, fallbackMenu, goodbye, greeting, text } from "./messages";
+import { errorMessage, fallbackMenu, goodbye, greeting, isRoundQuestion, text } from "./messages";
 import type { LineEvent } from "./webhook-schema";
 
 export type ReplyFn = (replyToken: string, messages: LineMessage[]) => Promise<void>;
@@ -86,17 +87,29 @@ async function runRuleCommand(
 ): Promise<LineMessage[]> {
   // ใช้คำสั่งตรงตัวแล้ว ถือว่าจบเรื่องเดิม ล้างบริบทที่คุยค้างไว้
   await clearSession(groupId, userId).catch(() => {});
+  const command = [parsed.command, parsed.args].join(" ").trim();
 
   try {
-    return await handleRuleCommand({
+    const messages = await handleRuleCommand({
       command: parsed.command,
       args: parsed.args,
       lineGroupId: groupId,
       user,
     });
+
+    // บอทถามว่ารอบไหน จำคำถามไว้ในบทสนทนา คนพิมพ์ตอบว่า "เสาร์" แทนการกดปุ่มได้ (PRP multi-open-rounds §4.3)
+    const question = messages.find(isRoundQuestion);
+    if (question) {
+      await saveSessionMessages(groupId, userId, [
+        { role: "user", text: command },
+        { role: "model", text: question.altText },
+      ]).catch(() => {});
+    }
+    return messages;
   } catch (error) {
     if (!isAppError(error)) throw error;
-    return [errorMessage(error.code, error.details)];
+    // ต้องถามว่าบิลไหน ตัวอย่างเป็นคำสั่งเดิมของคนพิมพ์ต่อด้วยชื่อบิล ไม่ใช่คำสั่งดูบิลเสมอ
+    return [errorMessage(error.code, { command, ...error.details })];
   } finally {
     await setListeningWindow(groupId, userId, keepListening).catch(() => {});
   }

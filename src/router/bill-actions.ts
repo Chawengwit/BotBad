@@ -18,7 +18,7 @@ import {
   paymentUndone,
   unpaidList,
 } from "@/line/messages";
-import { findActiveBillByTitle } from "@/repositories/bill.repository";
+import { listActiveBills } from "@/repositories/bill.repository";
 import {
   consumePendingAction,
   createPendingAction,
@@ -30,7 +30,9 @@ import type { LineUserRow } from "@/repositories/types";
 import { findUserById } from "@/repositories/user.repository";
 import {
   billMenuOptions,
+  canBillRound,
   getBill,
+  loadBillableRounds,
   loadBillEdit,
   markPayment,
   MAX_ADDED_ITEMS,
@@ -45,6 +47,8 @@ import {
   type AddedItem,
 } from "@/services/bill.service";
 import { parseNames, resolveOrCreateGuests, resolvePeople } from "@/services/people.service";
+import { pickRound, type RoundSelector } from "@/services/round.service";
+import { askWhichRound } from "./game-actions";
 import { advanceBillWizard } from "./wizard";
 
 /** งานที่ทำกับบิลของกลุ่ม กลุ่มมีบิลเปิดพร้อมกันได้หลายใบ จึงระบุชื่อบิลต่อท้ายได้ */
@@ -56,7 +60,7 @@ import { advanceBillWizard } from "./wizard";
 export async function doBillMenu(lineGroupId: string, user: LineUserRow): Promise<LineMessage[]> {
   const options = await billMenuOptions(lineGroupId, user.id);
 
-  if (!options.game && options.editableBills.length === 0) {
+  if (options.games.length === 0 && options.editableBills.length === 0) {
     const reason = options.gameBlocked
       ? gameBillBlockedNote(options.gameBlocked.game, options.gameBlocked.reason)
       : "";
@@ -93,10 +97,27 @@ export async function doChooseBillKind(
   return doStartEditBill(menu.line_group_id, user);
 }
 
-/** คิดค่ารอบที่เปิดอยู่: ค่าคอร์ท → ลูกแบด → ค่าอื่น ๆ → การ์ดยืนยัน */
-export async function doStartGameBill(lineGroupId: string, user: LineUserRow): Promise<LineMessage[]> {
-  const { pending } = await startGameBill(lineGroupId, user.id);
-  return advanceBillWizard(pending, {});
+/**
+ * คิดค่ารอบ: ค่าคอร์ท → ลูกแบด → ค่าอื่น ๆ → การ์ดยืนยัน
+ * เลือกจากเกมที่ยังเปิดอยู่หรือเพิ่งปิด (PRP multi-open-rounds §5.1) หลายเกมถามว่ารอบไหน
+ * patch = รายการที่ LLM รู้มาแล้วทั้งชุด ถ้าต้องถามรอบก่อนก็จำไว้ในการ์ด กดแล้วไปการ์ดยืนยันบิลเลย
+ */
+export async function doStartGameBill(
+  lineGroupId: string,
+  user: LineUserRow,
+  selector: RoundSelector = {},
+  patch: PendingPayload = {},
+): Promise<LineMessage[]> {
+  const pick = pickRound(await loadBillableRounds(lineGroupId), (round) => canBillRound(round, user.id), selector);
+
+  if (pick.kind === "choose") return askWhichRound(lineGroupId, user, "bill", pick.rounds, { patch });
+  if (pick.kind === "none") {
+    const mine = pick.rounds.some((round) => round.game.created_by === user.id);
+    throw new AppError(mine ? "NO_PLAYERS_TO_SPLIT" : "NOT_GAME_CREATOR");
+  }
+
+  const { pending } = await startGameBill(lineGroupId, user.id, pick.round.game.id);
+  return advanceBillWizard(pending, patch);
 }
 
 /**
@@ -229,9 +250,8 @@ export async function doUnpaidList(lineGroupId: string, title = ""): Promise<Lin
 /**
  * บันทึกการจ่าย ของตัวเองหรือของคนอื่น (PRP guests-split-bills-and-digest §5.6)
  *
- * ส่วนเติมท้ายเป็นได้สองอย่าง: ชื่อบิล หรือรายชื่อคน
- * ลองเทียบกับชื่อบิลที่เปิดอยู่ก่อน ไม่ตรงถึงถือว่าเป็นชื่อคน
- * เทียบแบบตรงทั้งสตริงจึงไม่กำกวม เพราะชื่อบิลเป็นข้อความที่ผู้ใช้ตั้งเอง
+ * ส่วนเติมท้ายเป็นได้สามแบบ: ชื่อบิล / รายชื่อคน / รายชื่อคนตามด้วยชื่อบิล เช่น "วิท ฮก ร้านโชคดี"
+ * แยกด้วยการเทียบท้ายข้อความกับชื่อบิลที่เปิดอยู่ ชื่อบิลเป็นข้อความที่ผู้ใช้ตั้งเองจึงไม่กำกวม
  */
 export async function doMarkPayment(
   lineGroupId: string,
@@ -240,15 +260,15 @@ export async function doMarkPayment(
   args = "",
 ): Promise<LineMessage[]> {
   const trimmed = args.trim();
-  const asBill = trimmed ? await tryResolveTitle(lineGroupId, trimmed) : null;
+  const title = trimmed ? await trailingBillTitle(lineGroupId, trimmed) : "";
 
-  const names = asBill ? [] : parseNames(trimmed);
+  const names = parseNames(trimmed.slice(0, trimmed.length - title.length));
   const people =
     names.length > 0
       ? await resolvePeopleOrThrow(lineGroupId, names, user)
       : [user];
 
-  const result = await markPayment(lineGroupId, user, people, paid, asBill ?? "");
+  const result = await markPayment(lineGroupId, user, people, paid, title);
 
   return [
     paid
@@ -257,9 +277,23 @@ export async function doMarkPayment(
   ];
 }
 
-async function tryResolveTitle(lineGroupId: string, title: string): Promise<string | null> {
-  const bill = await findActiveBillByTitle(lineGroupId, title);
-  return bill ? bill.title : null;
+/**
+ * ชื่อบิลที่เปิดอยู่ซึ่งข้อความนี้ลงท้ายด้วย ไม่เจอคืนสตริงว่าง
+ * ชื่อบิลมีช่องว่างได้ เลือกชื่อที่ยาวที่สุดที่ตรง และต้องขึ้นต้นหลังช่องว่างหรือคอมมา
+ * ไม่งั้นชื่อคนที่บังเอิญลงท้ายเหมือนชื่อบิลจะถูกตัดครึ่ง
+ */
+async function trailingBillTitle(lineGroupId: string, text: string): Promise<string> {
+  const lower = text.toLowerCase();
+  const matched = (await listActiveBills(lineGroupId))
+    .map((bill) => bill.title)
+    .filter((title) => {
+      const before = lower.slice(0, lower.length - title.length);
+      return lower.endsWith(title.toLowerCase()) && (before === "" || /[\s,]$/u.test(before));
+    })
+    .sort((a, b) => b.length - a.length);
+
+  // ตัดจากข้อความที่พิมพ์มาจริง ไม่ใช่ชื่อในระบบ ตัวพิมพ์เล็กใหญ่จะได้ตรงกับที่เหลือเป็นรายชื่อ
+  return matched[0] ? text.slice(text.length - matched[0].length) : "";
 }
 
 async function resolvePeopleOrThrow(

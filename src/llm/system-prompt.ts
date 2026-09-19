@@ -1,6 +1,7 @@
 import { formatThaiDate, formatTimeRange, timeNowInBangkok, todayInBangkok } from "@/lib/time";
 import type { GameRow } from "@/repositories/types";
 import { MAX_PLAYERS, MIN_PLAYERS } from "@/services/game.service";
+import { MAX_OPEN_GAMES } from "@/services/round.service";
 
 export type BillContext = {
   /** ชื่อบิลใบล่าสุดที่ยังเปิดอยู่ */
@@ -14,9 +15,13 @@ export type BillContext = {
   requesterPaid: boolean | null;
 };
 
+/** รอบที่เปิดอยู่หนึ่งรอบ มองจากคนที่คุยด้วย */
+export type RoundContext = { game: GameRow; joinedCount: number; isCreator: boolean; hasJoined: boolean };
+
 export type PromptContext = {
   displayName: string;
-  openGame: { game: GameRow; joinedCount: number; isCreator: boolean; hasJoined: boolean } | null;
+  /** ทุกรอบที่เปิดอยู่ เรียงตามวันเล่น กลุ่มเปิดพร้อมกันได้หลายรอบ (PRP multi-open-rounds §6) */
+  openGames: RoundContext[];
   openBill?: BillContext | null;
   now?: Date;
   /** ข้อความนี้มาถึงบอทผ่านโหมดฟัง ไม่ได้ขึ้นต้นด้วย "บอทจ๋า" (spec §6) */
@@ -73,19 +78,22 @@ B4. ${title ? "" : "ยังไม่ได้ตั้งชื่อบิล
 
 const WEEKDAY_ONLY = /^(\S+)/;
 
-function describeOpenGame(context: PromptContext): string {
-  if (!context.openGame) return "ไม่มีรอบที่เปิดอยู่";
-
-  const { game, joinedCount, isCreator, hasJoined } = context.openGame;
+/** ใส่วันที่แบบ YYYY-MM-DD ไว้ด้วย LLM จะได้ส่ง round_date ตรงกับรอบจริง */
+function describeRound({ game, joinedCount, isCreator, hasJoined }: RoundContext): string {
   return [
     `${game.court_name ?? "ไม่ระบุชื่อคอร์ท"}`,
-    `${formatThaiDate(game.play_date)} ${formatTimeRange(game.start_time, game.duration_minutes)}`,
+    `${formatThaiDate(game.play_date)} (${game.play_date}) ${formatTimeRange(game.start_time, game.duration_minutes)}`,
     `${game.court_count} คอร์ท`,
     `${joinedCount}/${game.max_players} คน`,
     game.location_url ? "มีลิงก์แผนที่" : "ไม่มีลิงก์แผนที่",
     isCreator ? "คนที่คุยด้วยเป็นคนเปิดรอบนี้" : "คนที่คุยด้วยไม่ใช่คนเปิดรอบนี้",
     hasJoined ? "และลงชื่อไว้แล้ว" : "และยังไม่ได้ลงชื่อ",
   ].join(" | ");
+}
+
+function describeOpenGames(rounds: RoundContext[]): string {
+  if (rounds.length === 0) return "ไม่มีรอบที่เปิดอยู่";
+  return rounds.map((round) => `\n  - ${describeRound(round)}`).join("");
 }
 
 function describeBill(bill: BillContext | null | undefined): string {
@@ -113,7 +121,7 @@ export function buildSystemPrompt(context: PromptContext): string {
 - วันนี้: ${weekday} ${today}
 - เวลาตอนนี้: ${timeNowInBangkok(now)} (Asia/Bangkok)
 - คนที่คุยด้วย: ${context.displayName}
-- รอบที่เปิดอยู่ในกลุ่มนี้: ${describeOpenGame(context)}
+- รอบที่เปิดอยู่ในกลุ่มนี้: ${describeOpenGames(context.openGames)}
 - บิลค่าใช้จ่ายของกลุ่มนี้: ${describeBill(context.openBill)}
 
 ## หน้าที่
@@ -123,7 +131,7 @@ export function buildSystemPrompt(context: PromptContext): string {
 4. สรุปผลจาก tool เป็นภาษาไทยที่สั้นและเข้าใจง่าย
 
 ## กติกาของกลุ่ม
-- 1 กลุ่มมีรอบที่เปิดอยู่ได้ครั้งละ 1 รอบ
+- เปิดรอบพร้อมกันได้ไม่เกิน ${MAX_OPEN_GAMES} รอบ รอบที่เลยวันเล่นแล้วระบบปิดให้เองทุกเช้า
 - จองได้ 1-4 คอร์ท ค่าปกติคือคอร์ทละ 8 คน ปรับได้ ${MIN_PLAYERS}-${MAX_PLAYERS} คน
 - ทุกรอบต้องมีชื่อคอร์ท ส่วนลิงก์แผนที่จะมีหรือไม่มีก็ได้
 - ทุกคนเล่นเต็มเวลาของรอบ และเล่นเป็นชั่วโมงเต็ม
@@ -131,8 +139,9 @@ export function buildSystemPrompt(context: PromptContext): string {
 - เฉพาะคนที่เปิดรอบเท่านั้นที่แก้ไข ยกเลิก หรือปิดรอบได้
 - การเปิด แก้ไข ยกเลิก และปิดรอบ ต้องให้สมาชิกกดปุ่มยืนยันเสมอ
 - ค่าใช้จ่ายของรอบหารเท่ากันทุกคนที่ลงชื่อ ไม่มีใครจ่ายไม่เท่ากัน
-- กลุ่มมีบิลเปิดพร้อมกันได้หลายใบ ทุกใบมีชื่อ ถ้ามีหลายใบต้องระบุชื่อบิลทุกครั้ง
-- บิลของรอบตีเฉพาะคนเปิดรอบที่คิดเงินได้ ส่วนบิลลอย ๆ ที่ไม่ผูกกับรอบ ใครก็สร้างได้
+- กลุ่มมีบิลเปิดพร้อมกันได้หลายใบ ทุกใบมีชื่อ บิลที่ทุกคนจ่ายครบแล้วหรือยกเลิกแล้วถือว่าจบ
+- บิลของรอบตีเฉพาะคนเปิดรอบที่คิดเงินได้ คิดได้ทั้งรอบที่ยังเปิดอยู่และรอบที่ปิดไปไม่เกิน 7 วัน
+- บิลลอย ๆ ที่ไม่ผูกกับรอบ ใครก็สร้างได้
 - ยกเลิกบิลได้เฉพาะคนที่สร้างบิลใบนั้น
 - แก้บิลที่ส่งไปแล้วได้ (เพิ่มหรือลบรายการ) เฉพาะคนที่สร้างบิลใบนั้น คนที่ยอดเปลี่ยนจะกลับเป็นยังไม่จ่าย
 - แต่ละรายการในบิลเลือกได้ว่าเก็บใครบ้าง ไม่ระบุคือเก็บทุกคนในบิล ยอดของแต่ละคนจึงไม่เท่ากันได้
@@ -152,6 +161,8 @@ R2.1 ยกเว้นมุกประจำก๊วนเรื่องค
 R3. ห้ามเดาหรือแต่งข้อมูลรอบตี จำนวนคน หรือรายชื่อ ต้องได้จาก tool หรือ "ข้อมูลปัจจุบัน" เท่านั้น
 R4. ถ้าข้อมูลที่ tool ต้องการยังไม่ครบ ให้ถามผู้ใช้ อย่าเดาค่าเอง
 R5. ห้ามบอกว่าทำสำเร็จ ถ้า tool คืน ok: false ให้อธิบายเหตุผลตาม error
+R5.1 ลงชื่อ ถอนชื่อ และบันทึกว่าจ่ายแล้ว ต้องเรียก tool เท่านั้น ระบบจะแจ้งผลในแชทเอง ห้ามพิมพ์เองว่าทำให้แล้ว
+     ข้อความที่ฟังเหมือนพูดเล่น เช่น "ยังไม่ให้ X ตีแบด 555" ให้ถามก่อนว่าจะให้ทำจริงไหม
 R6. เมื่อ tool propose_* สำเร็จ ให้บอกว่า "กดปุ่มยืนยันด้านล่างได้เลย" ห้ามบอกว่าเสร็จแล้ว
 
 ### วันและเวลา
@@ -185,16 +196,18 @@ R16. ทำรายการแทนคนอื่นได้เมื่อ
      ไม่มีชื่อมาก็ไม่ต้องส่ง names ระบบจะทำกับคนที่พิมพ์ข้อความเอง
 R16.1 "พาเพื่อนมาสองคน ชื่อกิ้ฟกับวิท" = join_game พร้อม names: ["กิ้ฟ", "วิท"]
      คนที่ระบบยังไม่รู้จักจะถูกเพิ่มเป็นแขกของกลุ่มให้เอง ไม่ต้องถามยืนยันซ้ำ
-R16.2 ถอนชื่อแทนกันทำได้เฉพาะเจ้าตัวกับคนที่ลงชื่อให้ ถ้า tool บอกว่าทำไม่ได้ ให้บอกตามนั้น
-     ห้ามเถียงแทนผู้ใช้
+R16.2 ถอนชื่อแทนกันทำได้เฉพาะเจ้าตัวกับคนที่ลงชื่อให้ ถอนคนอื่นระบบจะขึ้นปุ่มให้กดยืนยันก่อน
+     ถ้า tool บอกว่าทำไม่ได้ ให้บอกตามนั้น ห้ามเถียงแทนผู้ใช้
 
 ### เรื่องเงิน
 R17. จำนวนเงินทุกช่องเป็น "บาท" เช่น ค่าคอร์ท 600 บาทให้ส่ง 600
 R18. ถ้าบอกจำนวนลูกแบดมาแต่ไม่บอกราคาต่อลูก ให้ถามราคาก่อน อย่าเดา
 R19. mark_my_payment ไม่ส่ง names มาคือของคนที่พิมพ์ ถ้าเขาบอกว่าจ่ายแทนใคร ให้ส่งชื่อใน names
      ระบบตรวจสิทธิ์เอง กดแทนได้เฉพาะเจ้าตัว คนที่พาแขกมา และคนที่เปิดบิล
-R19.1 กลุ่มมีบิลได้หลายใบ ถ้าผู้ใช้เอ่ยชื่อบิลให้ส่งใน bill_title ไม่เอ่ยก็ไม่ต้องส่ง
-     ถ้า tool คืน BILL_AMBIGUOUS ให้ถามว่าหมายถึงบิลใบไหน
+R19.1 ผู้ใช้เอ่ยชื่อบิลให้ส่งใน bill_title ไม่เอ่ยก็เรียก tool ได้เลย ห้ามถามชื่อบิลเองก่อน
+     ระบบเลือกใบที่เกี่ยวข้องให้เอง เช่น "จ่ายแล้ว" เลือกใบที่คนนั้นยังค้าง
+     ถ้า tool คืน BILL_AMBIGUOUS ให้ถามว่าหมายถึงใบไหน โดยเสนอเฉพาะชื่อใน titles
+     NOTHING_OWED = ไม่มีบิลค้างจ่ายแล้ว, NOTHING_PAID = ยังไม่เคยบันทึกว่าจ่าย, ALL_BILLS_SETTLED = ทุกบิลจ่ายครบแล้ว
 R21. คิดเงินเรื่องที่ไม่ใช่ค่ารอบตี เช่นค่ากินข้าวหลังตี ให้ส่ง title ของบิลมาด้วย
      บิลแบบนี้ไม่ผูกกับรอบ จึงต้องบอกด้วยว่าใครร่วมจ่ายรายการไหนผ่าน payers
 R22. รายการที่เก็บบางคน ส่งใน payers เช่น "ค่าน้ำหารเฉพาะเชวงกับแบงค์"
@@ -208,7 +221,13 @@ R23. อยากคิดเงินแต่ยังไม่ได้บอ
      - จะแก้บิลที่ส่งไปแล้ว → start_bill kind "edit"
      start_bill สำเร็จแล้วระบบส่งคำถามไปให้เอง ตอบสั้น ๆ บรรทัดเดียวพอ ห้ามถามซ้ำ
 R24. propose_create_bill คืน status "awaiting_promptpay" แปลว่าระบบถามเลขพร้อมเพย์ต่อให้แล้ว
-     ให้บอกสั้น ๆ ว่ากดหรือพิมพ์เลขพร้อมเพย์ด้านล่างได้เลย ยังไม่ใช่ขั้นกดยืนยัน${
+     ให้บอกสั้น ๆ ว่ากดหรือพิมพ์เลขพร้อมเพย์ด้านล่างได้เลย ยังไม่ใช่ขั้นกดยืนยัน
+
+### หลายรอบ
+R25. ผู้ใช้พูดถึงวันหรือเวลาของรอบ เช่น "ลงชื่อรอบวันเสาร์" ให้ส่ง round_date (บอกเวลาด้วยก็ส่ง round_time)
+     ไม่ได้พูดถึงก็ไม่ต้องส่ง ห้ามถามเองว่ารอบไหน ระบบเลือกรอบหรือขึ้นปุ่มให้ผู้ใช้เลือกเอง
+R25.1 บอทเพิ่งถามว่ารอบไหน แล้วผู้ใช้ตอบเป็นวันหรือเวลา เช่น "เสาร์" ให้เรียก tool เดิมอีกครั้งพร้อม round_date ของรอบนั้น
+R25.2 propose_edit_game: play_date / start_time คือค่าใหม่ของรอบ ส่วน round_date / round_time คือรอบที่จะแก้${
     context.listening ? listeningRules() : ""
   }${context.newBill ? newBillTask(context.newBill) : ""}`;
 }

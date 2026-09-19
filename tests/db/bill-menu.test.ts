@@ -223,8 +223,8 @@ describe.skipIf(!canRunDbTests())("คิดเงินอะไรดี / บ
   describe("คิดเงินอะไรดี", () => {
     it("มีรอบที่คิดค่ารอบได้ ถามก่อนว่าเงินเรื่องไหน และการ์ดใช้ได้ครั้งเดียว", async () => {
       const owner = await newMember();
-      await openGame(owner.user.id);
-      await joinGame(GROUP_ID, owner.user.id);
+      const game = await openGame(owner.user.id);
+      await joinGame(GROUP_ID, game.id, owner.user.id);
 
       const menu = await send(owner.lineUserId, "บอทจ๋า คิดเงิน");
       expect(messageTexts(menu)).toContain("คิดเงินอะไรดี?");
@@ -264,8 +264,8 @@ describe.skipIf(!canRunDbTests())("คิดเงินอะไรดี / บ
 
     it("Gemini เจอประโยคที่ไม่ชัดว่าเงินเรื่องไหน ขึ้นการ์ดเลือกแบบเดียวกับคำสั่ง", async () => {
       const owner = await newMember();
-      await openGame(owner.user.id);
-      await joinGame(GROUP_ID, owner.user.id);
+      const game = await openGame(owner.user.id);
+      await joinGame(GROUP_ID, game.id, owner.user.id);
       currentClient = fakeClient([call("start_bill"), say("เลือกได้เลยครับ")]);
 
       const reply = await send(owner.lineUserId, "บอทจ๋า คิดเงินหน่อยสิ");

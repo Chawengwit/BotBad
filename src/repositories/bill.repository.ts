@@ -168,6 +168,30 @@ export async function listActiveBills(
   `;
 }
 
+/** บิลที่ยังใช้งานอยู่ พร้อมว่าใครยังค้างและใครจ่ายแล้ว */
+export type ActiveBill = BillRow & { unpaid_user_ids: string[]; paid_user_ids: string[] };
+
+/**
+ * บิลที่ยังใช้งานอยู่ของกลุ่ม พร้อมว่าใครยังค้างใครจ่ายแล้ว เรียงใบใหม่สุดก่อน
+ * ใช้เลือกบิลตอนผู้ใช้ไม่ได้ระบุชื่อ อ่านทีเดียวทั้งกลุ่ม ไม่ต้องไล่อ่านยอดทีละใบ
+ */
+export async function listActiveBillsWithPayers(
+  lineGroupId: string,
+  sql: Queryable = getSql(),
+): Promise<ActiveBill[]> {
+  return sql<ActiveBill[]>`
+    SELECT b.id, b.line_group_id, b.game_id, b.created_by, b.title, b.status, b.promptpay,
+           b.items, b.total_satang::int AS total_satang,
+           COALESCE(array_agg(bs.user_id::text) FILTER (WHERE NOT bs.paid), '{}') AS unpaid_user_ids,
+           COALESCE(array_agg(bs.user_id::text) FILTER (WHERE bs.paid), '{}') AS paid_user_ids
+    FROM bills b
+    LEFT JOIN bill_shares bs ON bs.bill_id = b.id
+    WHERE b.line_group_id = ${lineGroupId} AND b.status = 'sent'
+    GROUP BY b.id
+    ORDER BY b.id DESC
+  `;
+}
+
 /**
  * บิลที่คนนี้แก้ได้: ยังเปิดอยู่ เขาเป็นคนสร้าง และมีรายการอยู่ในตาราง bill_items
  * บิลที่สร้างก่อน migration 013 เก็บรายการไว้ใน jsonb เท่านั้น แก้แล้วยอดเดิมจะหายหมด จึงไม่นับ

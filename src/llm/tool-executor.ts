@@ -3,36 +3,22 @@ import type { LineMessage } from "@/lib/line";
 import { endTime, formatThaiDate } from "@/lib/time";
 import {
   billCard,
-  confirmBill,
-  confirmCancelGame,
-  confirmCloseGame,
   confirmCreateGame,
-  confirmEditGame,
-  joinedForNotice,
-  joinedNotice,
-  leftForNotice,
-  leftNotice,
-  NAG_AFTER_CHANGES,
-  nagFlipFlop,
+  errorMessage,
+  isRoundQuestion,
   paymentRecorded,
   paymentUndone,
   playerList,
 } from "@/line/messages";
-import { countJoinedPlayers, findOpenGame } from "@/repositories/game.repository";
-import {
-  createPendingAction,
-  updatePendingPayload,
-  type PendingPayload,
-} from "@/repositories/pending-action.repository";
-import { findPlayerStatus } from "@/repositories/player.repository";
+import { createPendingAction, type PendingPayload } from "@/repositories/pending-action.repository";
 import type { LineUserRow } from "@/repositories/types";
+import { editPatchSchema } from "@/services/game-admin.service";
 import {
-  editPatchSchema,
-  startCancelGame,
-  startCloseGame,
-  validatePatch,
-} from "@/services/game-admin.service";
-import { defaultMaxPlayers, gameDraftSchema, missingDraftFields } from "@/services/game.service";
+  defaultMaxPlayers,
+  gameDraftSchema,
+  missingDraftFields,
+  requireRoomForGame,
+} from "@/services/game.service";
 import {
   billDraftSchema,
   buildBillItems,
@@ -43,13 +29,24 @@ import {
   summarize,
   toBaht,
   totalOf,
-  unpaidSharesForGame,
 } from "@/services/bill.service";
 import { doBillMenu, doStartEditBill, doStartGameBill, doStartNewBill } from "@/router/bill-actions";
+import {
+  doCancel,
+  doClose,
+  doEdit,
+  doJoinFor,
+  doLeaveFor,
+} from "@/router/game-actions";
 import { advanceBillWizard, needsBillPromptPay } from "@/router/wizard";
-import { joinGame, joinPeople, leaveGame, leavePeople, listPlayers } from "@/services/player.service";
 import { resolveOrCreateGuests, resolvePeople } from "@/services/people.service";
-import { upsertGuest } from "@/repositories/user.repository";
+import {
+  hasJoined,
+  loadOpenRounds,
+  matchRounds,
+  type Round,
+  type RoundSelector,
+} from "@/services/round.service";
 import { isToolName, toolSchemas, type ToolName } from "./tools";
 
 export type ToolErrorCode = ErrorCode | "INVALID_ARGUMENT" | "INVALID_TOOL";
@@ -62,7 +59,16 @@ export type ToolOutcome = {
   result: ToolResult;
   /** ปุ่มหรือการ์ดที่ App จะแนบท้ายข้อความของ LLM (LLM Design §8) */
   messages: LineMessage[];
+  /** true = messages คือคำตอบทั้งหมด ไม่ส่งข้อความที่ LLM แต่งเอง */
+  systemReply?: boolean;
 };
+
+/**
+ * ลงชื่อ ถอนชื่อ และบันทึกจ่ายเงิน ตอบด้วยข้อความของระบบอย่างเดียว ทั้งตอนสำเร็จและไม่สำเร็จ
+ * เคยเกิดจริงในแชท 2026-09-18: tool ไม่สำเร็จ ไม่มีข้อความอะไรออกไป
+ * แชทจึงเหลือแค่ข้อความที่ LLM แต่งว่า "ถอนชื่อ louis ออกจากรอบให้แล้วครับ 👍"
+ */
+const SYSTEM_REPLY_TOOLS: ReadonlySet<ToolName> = new Set(["join_game", "leave_game", "mark_my_payment"]);
 
 export type ToolContext = {
   lineGroupId: string;
@@ -79,129 +85,74 @@ function fail(error: ToolErrorCode, extra: Record<string, unknown> = {}): ToolOu
   return { result: { ok: false, error, ...extra }, messages: [] };
 }
 
-async function describeOpenGame(lineGroupId: string, user: LineUserRow) {
-  const game = await findOpenGame(lineGroupId);
-  if (!game) return null;
-
-  const joinedCount = await countJoinedPlayers(game.id);
-  const status = await findPlayerStatus(game.id, user.id);
-
+/** ข้อมูลรอบสำหรับ LLM ทุกค่าอ่านจากฐานข้อมูล LLM ไม่ต้องเดาอะไรเอง */
+function describeRound({ game, players }: Round, user: LineUserRow) {
   return {
-    game,
-    joinedCount,
-    summary: {
-      play_date: game.play_date,
-      weekday: formatThaiDate(game.play_date).split(" ")[0],
-      start_time: game.start_time,
-      end_time: endTime(game.start_time, game.duration_minutes),
-      court_count: game.court_count,
-      court_name: game.court_name,
-      has_location: game.location_url !== null,
-      current_players: joinedCount,
-      max_players: game.max_players,
-      is_full: joinedCount >= game.max_players,
-      requester_is_creator: game.created_by === user.id,
-      requester_joined: status === "joined",
-    },
+    play_date: game.play_date,
+    weekday: formatThaiDate(game.play_date).split(" ")[0],
+    start_time: game.start_time,
+    end_time: endTime(game.start_time, game.duration_minutes),
+    court_count: game.court_count,
+    court_name: game.court_name,
+    has_location: game.location_url !== null,
+    current_players: players.length,
+    max_players: game.max_players,
+    is_full: players.length >= game.max_players,
+    requester_is_creator: game.created_by === user.id,
+    requester_joined: hasJoined({ game, players }, user.id),
   };
 }
 
-/**
- * ลงชื่อแทนคนอื่นผ่าน LLM (PRP guests-split-bills-and-digest §9)
- * ชื่อที่ไม่รู้จักถือว่าเป็นแขกใหม่ เหมือนทางคำสั่งพิมพ์ทุกประการ
- */
-async function runJoinFor(
-  lineGroupId: string,
-  user: LineUserRow,
-  names: string[],
-): Promise<[unknown, LineMessage[]]> {
-  const { people, unknown, ambiguous } = await resolvePeople(lineGroupId, names, user);
-  if (ambiguous.length > 0) throw new AppError("PERSON_AMBIGUOUS", { names: ambiguous });
-
-  const guests = await Promise.all(unknown.map((guest) => upsertGuest(lineGroupId, guest)));
-  const result = await joinPeople(lineGroupId, [...people, ...guests], user.id);
-
-  return [
-    {
-      joined: result.people.map((person) => person.display_name),
-      new_guests: guests.map((guest) => guest.display_name),
-      current_players: result.joinedCount,
-      max_players: result.game.max_players,
-    },
-    [joinedForNotice(user.display_name, result, guests.map((guest) => guest.display_name))],
-  ];
-}
-
-async function runLeaveFor(
-  lineGroupId: string,
-  user: LineUserRow,
-  names: string[],
-): Promise<[unknown, LineMessage[]]> {
-  const { people, unknown, ambiguous } = await resolvePeople(lineGroupId, names, user);
-  if (ambiguous.length > 0) throw new AppError("PERSON_AMBIGUOUS", { names: ambiguous });
-  if (people.length === 0) throw new AppError("PERSON_NOT_FOUND", { names: unknown });
-
-  const result = await leavePeople(lineGroupId, people, user.id);
-  return [
-    {
-      left: result.people.map((person) => person.display_name),
-      refused: result.skipped.map((entry) => entry.user.display_name),
-      current_players: result.joinedCount,
-      max_players: result.game.max_players,
-    },
-    [leftForNotice(user.display_name, result, unknown)],
-  ];
+/** รอบที่ผู้ใช้พูดถึง (PRP multi-open-rounds §6) ไม่ได้พูดถึงระบบเลือกหรือถามเอง */
+function selectorOf(args: Record<string, unknown>): RoundSelector {
+  return {
+    ...(typeof args.round_date === "string" ? { date: args.round_date } : {}),
+    ...(typeof args.round_time === "string" ? { time: args.round_time } : {}),
+  };
 }
 
 async function runTool(name: ToolName, args: Record<string, unknown>, context: ToolContext): Promise<ToolOutcome> {
   const { lineGroupId, user } = context;
 
   switch (name) {
-    case "get_open_game": {
-      const open = await describeOpenGame(lineGroupId, user);
-      return open ? ok(open.summary) : fail("NO_OPEN_GAME");
+    case "get_open_games": {
+      const rounds = await loadOpenRounds(lineGroupId);
+      if (rounds.length === 0) return fail("NO_OPEN_GAME");
+      return ok({ rounds: rounds.map((round) => describeRound(round, user)) });
     }
 
     case "list_players": {
-      const { game, players } = await listPlayers(lineGroupId);
+      const rounds = matchRounds(await loadOpenRounds(lineGroupId), selectorOf(args));
       return ok(
         {
-          current_players: players.length,
-          max_players: game.max_players,
-          players: players.map((player) => player.display_name),
+          rounds: rounds.map(({ game, players }) => ({
+            play_date: game.play_date,
+            start_time: game.start_time,
+            current_players: players.length,
+            max_players: game.max_players,
+            players: players.map((player) => player.display_name),
+          })),
         },
-        [playerList(game, players)],
+        rounds.map((round) => playerList(round.game, round.players)),
       );
     }
 
+    // ทางเดียวกับคำสั่งพิมพ์ทุกประการ ผลลัพธ์เป็นข้อความของระบบ (SYSTEM_REPLY_TOOLS)
     case "join_game": {
       const names = (args.names as string[] | undefined) ?? [];
-      if (names.length > 0) {
-        return ok(...(await runJoinFor(lineGroupId, user, names)));
-      }
-
-      const { game, joinedCount, changeCount } = await joinGame(lineGroupId, user.id);
-      return ok({ current_players: joinedCount, max_players: game.max_players, changed_mind: changeCount }, [
-        joinedNotice(user.display_name, joinedCount, game.max_players),
-        ...(changeCount >= NAG_AFTER_CHANGES ? [nagFlipFlop(user.display_name, changeCount)] : []),
-      ]);
+      const messages = await doJoinFor(lineGroupId, user, names, selectorOf(args));
+      return ok({ status: "replied" }, messages);
     }
 
+    // ถอนคนอื่นผ่านประโยคต้องกดยืนยันก่อน เพราะประโยคในแชทอาจเป็นมุก
     case "leave_game": {
       const names = (args.names as string[] | undefined) ?? [];
-      if (names.length > 0) {
-        return ok(...(await runLeaveFor(lineGroupId, user, names)));
-      }
-
-      const { game, joinedCount, changeCount } = await leaveGame(lineGroupId, user.id);
-      return ok({ current_players: joinedCount, max_players: game.max_players, changed_mind: changeCount }, [
-        leftNotice(user.display_name, joinedCount, game.max_players),
-        ...(changeCount >= NAG_AFTER_CHANGES ? [nagFlipFlop(user.display_name, changeCount)] : []),
-      ]);
+      const messages = await doLeaveFor(lineGroupId, user, names, selectorOf(args), true);
+      return ok({ status: "replied" }, messages);
     }
 
     case "propose_create_game": {
-      if (await findOpenGame(lineGroupId)) return fail("GAME_ALREADY_OPEN");
+      await requireRoomForGame(lineGroupId);
 
       // ไม่ได้บอกจำนวนคนมา ใช้ค่าปกติของจำนวนคอร์ทไปก่อน
       const draft = {
@@ -227,37 +178,20 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
     }
 
     case "propose_edit_game": {
+      // editPatchSchema ตัด round_date / round_time ทิ้งเอง เหลือเฉพาะค่าที่จะแก้
       const patch = editPatchSchema.parse(args);
-      const game = await findOpenGame(lineGroupId);
-      if (!game) return fail("NO_OPEN_GAME");
-      if (game.created_by !== user.id) return fail("NOT_GAME_CREATOR");
+      // ไม่มีอะไรจะแก้ บอกเลย ไม่ต้องถามรอบก่อนแล้วค่อยบอก
+      if (Object.keys(patch).length === 0) return fail("NO_CHANGES");
 
-      validatePatch(game, patch, await countJoinedPlayers(game.id));
-
-      const pending = await createPendingAction({
-        lineGroupId,
-        requestedBy: user.id,
-        actionType: "edit_game",
-        gameId: game.id,
-        payload: patch,
-      });
-
-      return ok({ status: "awaiting_confirmation" }, [confirmEditGame(pending.id, game, patch)]);
+      const messages = await doEdit(lineGroupId, user, selectorOf(args), patch);
+      return ok({ status: "awaiting_confirmation" }, messages);
     }
 
-    case "propose_cancel_game": {
-      const { pending, game, joinedCount } = await startCancelGame(lineGroupId, user.id);
-      return ok({ status: "awaiting_confirmation" }, [
-        confirmCancelGame(pending.id, game, joinedCount),
-      ]);
-    }
+    case "propose_cancel_game":
+      return ok({ status: "awaiting_confirmation" }, await doCancel(lineGroupId, user, selectorOf(args)));
 
-    case "propose_close_game": {
-      const { pending, game, joinedCount } = await startCloseGame(lineGroupId, user.id);
-      return ok({ status: "awaiting_confirmation" }, [
-        confirmCloseGame(pending.id, game, joinedCount, await unpaidSharesForGame(game.id)),
-      ]);
-    }
+    case "propose_close_game":
+      return ok({ status: "awaiting_confirmation" }, await doClose(lineGroupId, user, selectorOf(args)));
 
     case "get_bill": {
       const { bill, items: billItems, shares } = await getBill(
@@ -296,7 +230,7 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
       const kind = args.kind as "game" | "new" | "edit" | undefined;
       const messages =
         kind === "game"
-          ? await doStartGameBill(lineGroupId, user)
+          ? await doStartGameBill(lineGroupId, user, selectorOf(args))
           : kind === "new"
             ? await doStartNewBill(lineGroupId, user, (args.title as string | undefined) ?? "")
             : kind === "edit"
@@ -311,11 +245,13 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
       const title = (args.title as string | undefined)?.trim() ?? "";
       const promptpay = args.promptpay as string | undefined;
 
-      // มาจากปุ่ม "สร้างบิลใหม่" ใช้ pending ใบนั้นต่อ ไม่งั้นตรวจสิทธิ์และเงื่อนไขก่อน
-      // จะได้ไม่สร้างการ์ดยืนยันที่กดไปก็ไม่ผ่าน
+      // มาจากปุ่ม "สร้างบิลใหม่" ใช้ pending ใบนั้นต่อ ตั้งชื่อมาคือบิลลอย ๆ ตรวจชื่อก่อน
+      // จะได้ไม่สร้างการ์ดยืนยันที่กดไปก็ไม่ผ่าน ไม่มีทั้งสองอย่างคือบิลค่ารอบ ต้องเลือกเกมก่อน
       const pending = context.billPendingId
         ? await continueNewBill(context.billPendingId, lineGroupId, user.id, title)
-        : (await startCreateBill(lineGroupId, user.id, title)).pending;
+        : title
+          ? (await startCreateBill(lineGroupId, user.id, title)).pending
+          : null;
 
       const items = buildBillItems(draft);
 
@@ -343,6 +279,12 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
         extras_done: true,
       };
 
+      // บิลค่ารอบ: เกมเดียวไปการ์ดยืนยันเลย หลายเกมถามว่ารอบไหน รายการที่บอกมาจำไว้ในการ์ดนั้น
+      if (!pending) {
+        const messages = await doStartGameBill(lineGroupId, user, selectorOf(args), patch);
+        return ok({ status: "awaiting_confirmation", total_baht: toBaht(totalOf(items)) }, messages);
+      }
+
       // บิลลอย ๆ ที่ยังไม่รู้เลขพร้อมเพย์ จะได้คำถามเลขก่อน ไม่ใช่การ์ดยืนยัน
       const asksPromptPay = needsBillPromptPay(pending, { ...pending.payload, ...patch });
       const preview = await advanceBillWizard(pending, patch);
@@ -364,7 +306,7 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
         names.length > 0
           ? (await resolvePeople(lineGroupId, names, user)).people
           : [user];
-      if (people.length === 0) return fail("PERSON_NOT_FOUND", { names });
+      if (people.length === 0) throw new AppError("PERSON_NOT_FOUND", { names });
 
       const result = await markPayment(
         lineGroupId,
@@ -379,6 +321,7 @@ async function runTool(name: ToolName, args: Record<string, unknown>, context: T
         {
           paid,
           recorded: result.people.map((entry) => entry.user.display_name),
+          unchanged: result.unchanged.map((person) => person.display_name),
           refused: result.refused.map((entry) => entry.user.display_name),
           unpaid_count: unpaid.length,
           settled,
@@ -411,10 +354,27 @@ export async function executeTool(
     });
   }
 
+  const valid = parsed.data as Record<string, unknown>;
   try {
-    return await runTool(name, parsed.data as Record<string, unknown>, context);
+    const outcome = await runTool(name, valid, context);
+
+    // ถามว่ารอบไหนเป็นข้อความของระบบเสมอ LLM ไม่ต้องถามหรือพูดทับเอง (PRP multi-open-rounds §6)
+    if (outcome.messages.some(isRoundQuestion)) {
+      return { result: { ok: true, data: { status: "choose_round" } }, messages: outcome.messages, systemReply: true };
+    }
+    return SYSTEM_REPLY_TOOLS.has(name) ? { ...outcome, systemReply: true } : outcome;
   } catch (error) {
-    if (isAppError(error)) return fail(error.code, error.details);
-    throw error;
+    if (!isAppError(error)) throw error;
+    if (!SYSTEM_REPLY_TOOLS.has(name)) return fail(error.code, error.details);
+
+    // ไม่สำเร็จก็ตอบด้วยข้อความเดียวกับคำสั่งพิมพ์
+    // ต้องถามว่าบิลไหน ตัวอย่างเป็นคำสั่งพิมพ์ที่ได้ผลเดียวกัน จะได้พิมพ์ตามได้แม้ Gemini ใช้ไม่ได้
+    const names = (valid.names as string[] | undefined) ?? [];
+    const command = name === "mark_my_payment" ? [valid.paid ? "จ่ายแล้ว" : "ยังไม่จ่าย", ...names].join(" ") : "";
+    return {
+      ...fail(error.code, error.details),
+      messages: [errorMessage(error.code, { command, ...error.details })],
+      systemReply: true,
+    };
   }
 }

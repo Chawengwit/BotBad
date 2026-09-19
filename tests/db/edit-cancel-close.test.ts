@@ -154,11 +154,11 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
 
   it("ลดคอร์ทจนที่นั่งไม่พอไม่ได้", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner.user.id, 2); // รับ 16 คน
+    const game = await openGame(owner.user.id, 2); // รับ 16 คน
 
     for (let index = 0; index < 9; index += 1) {
       const player = await newUser(`ผู้เล่น ${index + 1}`);
-      await joinGame(GROUP_ID, player.user.id, sql);
+      await joinGame(GROUP_ID, game.id, player.user.id, sql);
     }
 
     const collected: Collected[] = [];
@@ -196,11 +196,11 @@ describe.skipIf(!canRunDbTests())("แก้ไข ยกเลิก ปิด�
 
   it("ลดจำนวนคนต่ำกว่าคนที่ลงชื่อไว้แล้วไม่ได้", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner.user.id, 2);
+    const game = await openGame(owner.user.id, 2);
 
     for (let index = 0; index < 13; index += 1) {
       const player = await newUser(`ผู้เล่น ${index + 1}`);
-      await joinGame(GROUP_ID, player.user.id, sql);
+      await joinGame(GROUP_ID, game.id, player.user.id, sql);
     }
 
     const collected: Collected[] = [];

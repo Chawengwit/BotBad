@@ -49,6 +49,17 @@ export async function findUserById(
   return rows[0] ?? null;
 }
 
+/** หลายคนจาก id ในคำสั่งเดียว เรียงตามลำดับ id ที่ส่งมา id ที่ไม่มีแล้วจะหายไปเฉย ๆ */
+export async function findUsersByIds(ids: string[], sql: Queryable = getSql()): Promise<UserRow[]> {
+  // เทียบเป็นข้อความ เพราะ id ที่ driver คืนมาเป็น string ส่วนคอลัมน์เป็น BIGINT
+  const rows = await sql<UserRow[]>`
+    SELECT id, line_user_id, line_group_id, display_name
+    FROM users
+    WHERE id::text = ANY(${ids})
+  `;
+  return ids.flatMap((id) => rows.filter((row) => row.id === id));
+}
+
 /**
  * แขกของกลุ่ม ชื่อเดิมได้แถวเดิมเสมอ (PRP guests-split-bills-and-digest §4.1)
  * ประวัติการลงชื่อและการจ่ายเงินของแขกจึงตามตัวไปทุกรอบ

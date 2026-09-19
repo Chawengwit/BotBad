@@ -59,6 +59,8 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
   const lineUserIds: string[] = [];
 
   async function cleanup(): Promise<void> {
+    // ส่งข้อความผ่าน handleEvent จะเปิดโหมดฟังไว้ ไม่ลบจะค้างใน schema เทสทุกครั้งที่รัน
+    await sql`DELETE FROM conversation_sessions WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM pending_actions WHERE line_group_id = ${GROUP_ID}`;
     await sql`DELETE FROM game_players WHERE game_id IN (SELECT id FROM games WHERE line_group_id = ${GROUP_ID})`;
     await sql`DELETE FROM games WHERE line_group_id = ${GROUP_ID}`;
@@ -236,22 +238,32 @@ describe.skipIf(!canRunDbTests())("เปิดรอบตี (ฐานข้�
     expect(messageTexts(collected.at(-1)!.messages)).toContain("ลิงก์แผนที่");
   });
 
-  it("กลุ่มเดียวเปิดรอบซ้อนไม่ได้", async () => {
+  // เลิกบังคับ 1 กลุ่ม 1 รอบแล้ว เปิดพร้อมกันได้ไม่เกิน 3 รอบ (PRP multi-open-rounds)
+  it("เปิดรอบที่สองได้ขณะที่รอบแรกยังเปิดอยู่ และเสนอที่เดิมของรอบแรก", async () => {
     const userId = newUser();
     const collected: Collected[] = [];
     const context = makeContext(collected);
+    const press = (label: string) =>
+      handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, label), userId), context);
 
     await runUntilCourtName(userId, collected);
     await handleEvent(textEvent("คอร์ทแรก", userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "ข้าม"), userId), context);
-    await handleEvent(postbackEvent(actionData(collected.at(-1)!.messages, "เปิดตี"), userId), context);
+    await press("ข้าม");
+    await press("ข้าม");
+    await press("เปิดตี");
 
-    const second: Collected[] = [];
-    await handleEvent(textEvent("บอทจ๋า เปิดตี", userId), makeContext(second));
+    await runUntilCourtName(userId, collected);
+    expect(messageTexts(collected.at(-1)!.messages)).toContain("คอร์ทแรก");
+    await press("ที่เดิม");
+    await press("เปิดตี");
 
-    expect(messageTexts(second[0]!.messages)).toContain("มีรอบที่เปิดอยู่แล้ว");
-    expect(await sql`SELECT id FROM games WHERE line_group_id = ${GROUP_ID}`).toHaveLength(1);
+    const rows = await sql<{ court_name: string; status: string }[]>`
+      SELECT court_name, status FROM games WHERE line_group_id = ${GROUP_ID} ORDER BY id
+    `;
+    expect(rows).toEqual([
+      { court_name: "คอร์ทแรก", status: "open" },
+      { court_name: "คอร์ทแรก", status: "open" },
+    ]);
   });
 
   it("คนอื่นกดปุ่มของคนที่สั่ง บอทเงียบ และคนสั่งยังกดต่อได้", async () => {

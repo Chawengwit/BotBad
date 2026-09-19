@@ -51,7 +51,7 @@ describe.skipIf(!canRunDbTests())("สรุปประจำสัปดาห
     return (await upsertUser(lineUserId, name, sql)).id;
   }
 
-  async function openGame(createdBy: string, playDate = "2030-01-15"): Promise<string> {
+  async function openGame(createdBy: string, playDate = "2030-01-15", courtName = "ABC Badminton"): Promise<string> {
     const game = await insertGame(
       {
         lineGroupId: GROUP_ID,
@@ -61,7 +61,7 @@ describe.skipIf(!canRunDbTests())("สรุปประจำสัปดาห
         durationMinutes: 120,
         courtCount: 2,
         maxPlayers: 16,
-        courtName: "ABC Badminton",
+        courtName,
         locationUrl: null,
         promptpay: null,
       },
@@ -92,7 +92,7 @@ describe.skipIf(!canRunDbTests())("สรุปประจำสัปดาห
     const groups = (await collectDigestData(sql)).filter(
       (group) => group.lineGroupId === GROUP_ID,
     );
-    const messages = groups[0] ? buildDigest(groups[0], TODAY) : null;
+    const messages = groups[0] ? buildDigest(groups[0]) : null;
     return messages ? messageText(messages[0]!) : null;
   }
 
@@ -103,8 +103,8 @@ describe.skipIf(!canRunDbTests())("สรุปประจำสัปดาห
 
   it("บอกรอบที่เปิดอยู่พร้อมจำนวนคนที่ลงแล้ว", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner);
-    await joinGame(GROUP_ID, owner, sql);
+    const gameId = await openGame(owner);
+    await joinGame(GROUP_ID, gameId, owner, sql);
 
     const body = await digestFor();
     expect(body).toContain("มีนัด");
@@ -112,11 +112,16 @@ describe.skipIf(!canRunDbTests())("สรุปประจำสัปดาห
     expect(body).toContain("1/16 คน");
   });
 
-  it("รอบที่วันเล่นผ่านไปแล้วแต่ยังไม่ปิด เตือนให้ปิดรอบ", async () => {
+  // กลุ่มเปิดได้หลายรอบ สรุปต้องบอกทุกรอบ ไม่ใช่รอบแรกที่ query เจอ (PRP multi-open-rounds §10)
+  it("เปิดหลายรอบ สรุปขึ้นทุกรอบเรียงตามวันเล่น", async () => {
     const owner = await newUser("เชวง");
-    await openGame(owner, "2020-01-01");
+    await openGame(owner, "2030-01-19", "คอร์ทวันเสาร์");
+    await openGame(owner, "2030-01-16", "คอร์ทวันพุธ");
 
-    expect(await digestFor()).toContain("ยังไม่ได้ปิด");
+    const body = (await digestFor()) ?? "";
+    expect(body).toContain("คอร์ทวันพุธ");
+    expect(body).toContain("คอร์ทวันเสาร์");
+    expect(body.indexOf("คอร์ทวันพุธ")).toBeLessThan(body.indexOf("คอร์ทวันเสาร์"));
   });
 
   /** บั๊กที่เคยมีจริง: นับบิลด้วยการ join ผ่าน games บิลลอย ๆ จึงหายไปทั้งใบ */
@@ -145,7 +150,9 @@ describe.skipIf(!canRunDbTests())("สรุปประจำสัปดาห
   it("บิลที่จ่ายครบแล้วไม่นับว่าค้าง", async () => {
     const owner = await newUser("เชวง");
     await unpaidBill(owner, "ค่ากินข้าว", null, 30000);
-    await sql`UPDATE bill_shares SET paid = true`;
+    // ต้องจำกัดแค่บิลของกลุ่มนี้ ไฟล์เทสอื่นรันพร้อมกันใน schema เดียวกัน
+    // เคยไม่มี WHERE แล้วไปทำให้บิลของเทสไฟล์อื่นกลายเป็นจ่ายครบ เทสพวกนั้นพังแบบสุ่ม
+    await sql`UPDATE bill_shares SET paid = true WHERE bill_id IN (SELECT id FROM bills WHERE line_group_id = ${GROUP_ID})`;
 
     expect(await digestFor()).toBeNull();
   });
