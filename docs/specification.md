@@ -1158,12 +1158,15 @@ action=wizard&pending_id=<uuid>&step=bill_kind&value=game|new|edit
 action=wizard&pending_id=<uuid>&step=edit_bill&value=<id บิล>
 action=wizard&pending_id=<uuid>&step=edit&value=add|remove|back
 action=wizard&pending_id=<uuid>&step=edit_remove&value=<id รายการ>|new<ลำดับ>
+action=wizard&pending_id=<uuid>&step=game&value=<id รอบ>
 action=bill_paid
 action=bill_unpaid
 action=bill_status
 ```
 
-- `action=join|leave|list` ทำกับรอบ `open` ของกลุ่มที่กด
+- `action=join|leave|list` เป็นปุ่มเก่าที่ไม่มี id ของรอบ ทำเหมือนพิมพ์คำสั่ง คือเลือกรอบตาม §7 และถามเมื่อมีหลายรอบ
+- `step=game` คือปุ่มบนการ์ด "รอบไหน?" (pending `choose_game`) กดแล้วทำคำสั่งที่จำไว้กับรอบนั้น
+  รอบนั้นถูกปิดหรือยกเลิกไปแล้ว → บอทไม่ตอบอะไร เหมือนปุ่มที่ใช้ไม่ได้แล้ว
 - ปุ่มที่มี `pending_id` ต้องตรวจว่าคนกดคือ `requested_by`, ยังไม่หมดอายุ และยังไม่ถูกใช้
   ไม่ผ่าน (`NOT_REQUESTER` / `PENDING_EXPIRED`) → บอทไม่ตอบอะไร ไม่ส่งข้อความ error ลงกลุ่ม (§23)
 - ปุ่ม postback ไม่ตั้ง `displayText` เพราะ LINE จะโพสต์ข้อความนั้นในนามคนกด
@@ -1578,10 +1581,21 @@ db/migrations/
 ├── 003_create_game_players.sql
 ├── 004_create_pending_actions.sql
 ├── 005_create_conversation_sessions.sql
-└── 006_game_capacity_and_venue.sql
+├── 006_game_capacity_and_venue.sql
+├── 007_add_games_promptpay.sql
+├── 008_create_bills.sql
+├── 009_alter_pending_action_types.sql
+├── 010_add_change_counters.sql
+├── 011_add_listening_window.sql
+├── 012_guests_and_proxy_signup.sql
+├── 013_bills_v2.sql
+├── 014_create_group_digests.sql
+├── 015_add_edit_bill_action.sql
+├── 016_add_leave_players_action.sql
+└── 017_multi_open_rounds.sql        ลบ unique index 1 กลุ่ม 1 รอบ + pending ชนิด choose_game
 ```
 
-รันด้วย script ง่าย ๆ (`scripts/migrate.ts`) ที่:
+รันด้วย `scripts/migrate.mjs` ที่:
 
 - สร้างตาราง `schema_migrations` เก็บชื่อไฟล์ที่รันแล้ว
 - รันเฉพาะไฟล์ที่ยังไม่เคยรัน ภายใน transaction
@@ -1593,7 +1607,7 @@ db/migrations/
 ### Initial Schema (SQL)
 
 ⚠️ นี่คือ schema **ตอนเริ่มโปรเจค** (migration 001-005) ไม่ใช่ของปัจจุบัน
-migration 006-014 เพิ่มและแก้ไปอีกหลายอย่าง ของจริงดูที่ `db/migrations/`
+migration 006-017 เพิ่มและแก้ไปอีกหลายอย่าง ของจริงดูที่ `db/migrations/`
 
 ```sql
 CREATE TABLE users (
@@ -1621,6 +1635,7 @@ CREATE TABLE games (
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- ลบแล้วใน migration 017 ตอนนี้เปิดได้ 3 รอบต่อกลุ่ม บังคับในโค้ด (§7)
 CREATE UNIQUE INDEX uq_games_one_open_per_group
   ON games (line_group_id)
   WHERE status = 'open';
@@ -1940,79 +1955,66 @@ Env ทั้งหมดต้อง validate ด้วย zod ตอน start 
 
 # 25. Project Structure
 
-Recommended:
+โครงสร้างปัจจุบัน (2026-09-19):
 
 ```text
 badminton-line-bot/
 │
-├── app/
-│   └── api/
-│       └── line/
-│           └── webhook/
-│               └── route.ts
+├── app/api/
+│   ├── line/webhook/route.ts     รับ webhook จาก LINE ตรวจลายเซ็นแล้วส่งต่อ
+│   ├── cron/daily/route.ts       งานประจำวัน: กัน Supabase หลับ ปิดรอบที่เลยวันเล่น สรุปวันศุกร์ (§27.2)
+│   └── health/route.ts           health check
 │
 ├── src/
-│   ├── lib/
-│   │   ├── line.ts
-│   │   ├── gemini.ts
-│   │   ├── db.ts
-│   │   ├── time.ts
-│   │   └── env.ts
+│   ├── lib/                      line, gemini, db, env, time, log, read-body, line-signature
+│   │
+│   ├── line/
+│   │   ├── handle-event.ts       แยกทางเข้า: postback / คำสั่งตรงตัว / คำตอบของ wizard / โหมดฟัง / LLM
+│   │   ├── messages.ts           ข้อความและการ์ดทุกใบ รวมการ์ด "รอบไหน?" และข้อความ error (§26)
+│   │   ├── flex.ts               ชิ้นส่วน Flex (การ์ด ปุ่ม ไอคอน สี)
+│   │   └── webhook-schema.ts
 │   │
 │   ├── router/
-│   │   ├── router.ts
-│   │   ├── rule-commands.ts
-│   │   └── postback.ts
+│   │   ├── rule-commands.ts      คำสั่งตรงตัว (§18)
+│   │   ├── postback.ts           ปุ่มทุกปุ่ม รวมการกดเลือกรอบ
+│   │   ├── game-actions.ts       ลงชื่อ ถอนชื่อ รายชื่อ แก้ ยกเลิก ปิด ใช้ร่วมกันทั้งคำสั่ง ปุ่ม และ LLM
+│   │   ├── bill-actions.ts       งานเรื่องบิล
+│   │   ├── wizard.ts             wizard เปิดรอบ แก้รอบ และคิดเงิน
+│   │   ├── text-answer.ts        ข้อความที่ตอบคำถามของ wizard
+│   │   ├── listening.ts          คำจบบทสนทนาและคำรับคำของโหมดฟัง
+│   │   ├── wake-word.ts
+│   │   └── easter-eggs.ts
 │   │
 │   ├── llm/
 │   │   ├── system-prompt.ts
-│   │   ├── tools.ts
-│   │   ├── tool-schemas.ts
+│   │   ├── tools.ts              tool declarations + zod schema
 │   │   ├── tool-executor.ts
 │   │   └── agent.ts
 │   │
 │   ├── services/
-│   │   ├── game.service.ts
-│   │   ├── player.service.ts
-│   │   ├── user.service.ts
-│   │   ├── pending-action.service.ts
-│   │   └── session.service.ts
+│   │   ├── round.service.ts      เลือกรอบที่คำสั่งหมายถึง (§7)
+│   │   ├── game.service.ts       เปิดรอบ (จำกัด 3 รอบ)
+│   │   ├── game-admin.service.ts แก้ ยกเลิก ปิดรอบ
+│   │   ├── player.service.ts     ลงชื่อ ถอนชื่อ
+│   │   ├── people.service.ts     แปลชื่อที่พิมพ์มาเป็นคน และแขก
+│   │   ├── bill.service.ts       คิดเงิน บิล การจ่าย
+│   │   ├── digest.service.ts     สรุปประจำสัปดาห์
+│   │   └── user.service.ts
 │   │
-│   ├── repositories/
-│   │   ├── game.repository.ts
-│   │   ├── player.repository.ts
-│   │   ├── user.repository.ts
-│   │   ├── pending-action.repository.ts
-│   │   ├── session.repository.ts
-│   │   └── types.ts
+│   ├── repositories/             Raw SQL เท่านั้น (§20): game, player, user, bill, pending-action, session, digest + types.ts
 │   │
-│   ├── errors/
-│   │   └── app-errors.ts
-│   │
-│   └── line/
-│       ├── messages.ts
-│       └── flex.ts
+│   └── errors/app-errors.ts      ERROR_CODES ทุก code ต้องมีข้อความของตัวเอง (มีเทสบังคับ)
 │
-├── db/
-│   └── migrations/
-│       ├── 001_create_users.sql
-│       ├── 002_create_games.sql
-│       ├── 003_create_game_players.sql
-│       ├── 004_create_pending_actions.sql
-│       └── 005_create_conversation_sessions.sql
-│
-├── scripts/
-│   └── migrate.ts
-│
-├── tests/
-│
+├── db/migrations/                001–017 (§20)
+├── scripts/migrate.mjs           รัน migration (dry-run เป็นค่าตั้งต้น ต้องใส่ --apply)
+├── tests/                        unit test และ tests/db/ ที่รันกับ schema bot_test
 ├── docs/
 │   ├── specification.md
-│   └── llm-design.md
-│
+│   ├── llm-design.md
+│   └── PRP/                      เอกสารออกแบบของแต่ละฟีเจอร์
+├── public/icons/                 ไอคอน Font Awesome แยกโฟลเดอร์ตามสี (§23)
+├── vercel.json                   cron ทุกวัน 03:00 UTC = 10:00 เวลาไทย
 ├── .env.example
-├── package.json
-├── tsconfig.json
 ├── CLAUDE.md
 └── README.md
 ```
@@ -2184,7 +2186,7 @@ cron ยิง **ทุกวัน** แต่ push เฉพาะวันศ
 - [x] Time
 - [x] Duration
 - [x] Court name + map link
-- [x] One open game per group
+- [x] ~~One open game per group~~ → เปิดพร้อมกันได้ไม่เกิน 3 รอบ พร้อมการ์ด "รอบไหน?" (§7)
 - [x] Join
 - [x] Leave
 - [x] List Players
@@ -2212,9 +2214,12 @@ cron ยิง **ทุกวัน** แต่ push เฉพาะวันศ
 - [x] แต่ละรายการในบิลเลือกได้ว่าเก็บใครบ้าง
 - [x] จ่ายแทนกันได้ (แขกพิมพ์เองไม่ได้ ต้องมีคนกดแทน)
 - [x] สรุปประจำสัปดาห์เข้ากลุ่มทุกวันศุกร์ (§27.2)
+- [x] ปิดรอบที่เลยวันเล่นให้อัตโนมัติทุกเช้า และคิดค่ารอบได้ถึง 7 วันหลังปิด (§7)
+- [x] `ลงชื่อ` / `ถอนชื่อ` ที่ต่อท้ายด้วยวันหรือรอบ ส่งให้ Gemini อ่าน ไม่กลายเป็นชื่อแขก (§7)
 
 รายละเอียดของสามข้อแรกอยู่ใน `docs/PRP/bill-splitting.md`
-ส่วนหกข้อล่างอยู่ใน `docs/PRP/guests-split-bills-and-digest.md`
+ส่วนหกข้อถัดมาอยู่ใน `docs/PRP/guests-split-bills-and-digest.md`
+และสองข้อล่างกับข้อ "เปิดได้ 3 รอบ" อยู่ใน `docs/PRP/multi-open-rounds.md`
 
 ## Not in MVP
 
@@ -2226,11 +2231,9 @@ cron ยิง **ทุกวัน** แต่ push เฉพาะวันศ
 - [ ] Badminton skill rating
 - [ ] Match making
 - [ ] Ranking
-- [ ] Multiple open games per group
 - [ ] Cross-group features / Public badminton discovery
 - [ ] Waiting list
 - [ ] Admin override / Admin dashboard
-- [ ] Auto close game
 - [ ] Web application
 - [ ] Autonomous AI Agent (LLM ตัดสินใจเปลี่ยนข้อมูลเองโดยไม่ยืนยัน)
 - [ ] General chat นอกเรื่องรอบตี
@@ -2266,10 +2269,13 @@ Implement in this order:
 20. Tests
 21. Vercel deployment
 22. เลขพร้อมเพย์ของรอบตี ✅
-23. คิดเงิน + หารค่าใช้จ่าย + บันทึกการจ่าย ✅ (เหลือฝั่งภาษาธรรมชาติ)
+23. คิดเงิน + หารค่าใช้จ่าย + บันทึกการจ่าย ✅ (รวมทางภาษาธรรมชาติแล้ว)
+24. แขก บิลหลายใบ และสรุปประจำสัปดาห์ ✅
+25. เปิดได้หลายรอบพร้อมกัน + ปิดรอบอัตโนมัติ ✅
 ```
 
 ข้อ 22-23 ทำตามลำดับใน `docs/PRP/bill-splitting.md` §16
+ข้อ 24 ใน `docs/PRP/guests-split-bills-and-digest.md` และข้อ 25 ใน `docs/PRP/multi-open-rounds.md` §11
 
 ---
 
@@ -2374,7 +2380,8 @@ ABC Badminton
 - `บอทจ๋า พรุ่งนี้สองทุ่มเปิดตี 2 คอร์ท 2 ชั่วโมง` → การ์ดยืนยัน → เปิดรอบได้
 - `บอทจ๋า พรุ่งนี้สองทุ่มเปิดตี` → บอทถามจำนวนคอร์ทและชั่วโมง → ตอบต่อได้
 - `บอทจ๋า คืนนี้ผมไปด้วย` → ลงชื่อสำเร็จ
-- เปิดรอบซ้ำตอนมีรอบ open → ถูก reject
+- เปิดรอบที่ 4 ตอนกลุ่มเปิดครบ 3 รอบแล้ว → ถูก reject (`GAME_LIMIT_REACHED`)
+- กลุ่มที่เปิดหลายรอบ คำสั่งที่ไม่ชัดว่ารอบไหน → การ์ด "รอบไหน?" กดแล้วทำกับรอบนั้น
 - คนที่ไม่ใช่ผู้สร้างสั่งแก้ไข / ยกเลิก / ปิดรอบ → ถูก reject
 - คนอื่นกดปุ่มยืนยันของคนอื่น → ไม่มีผล และบอทไม่ตอบ
 - ปุ่มทุกปุ่มกดได้ทั้งบนมือถือและ LINE PC
@@ -2426,8 +2433,12 @@ Players:
 max_players defaults to court_count * 8 and the organiser may change it (2..64)
 max_players can never drop below the number of people already signed up
 
-One open game:
-a group can have at most 1 game with status = open
+Open games:
+a group can have at most 3 games with status = open, checked in code under
+an advisory lock on the group (confirming at the same time must not open a 4th)
+a command that does not name a round acts on the only round it can act on,
+or asks with a "which round?" card; games whose play_date has passed are
+closed every morning by the daily cron
 
 Full-time:
 every player joins the entire Game duration
@@ -2450,7 +2461,7 @@ executes services, and sends the reply to LINE.
 LLM must never directly access database or LINE API.
 
 LLM failure:
-fall back to quick-reply menu; rule-based commands must keep working
+fall back to the Flex button menu; rule-based commands must keep working
 
 Database:
 no ORM, raw parameterized SQL only

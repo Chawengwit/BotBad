@@ -45,7 +45,7 @@ Postback ไม่เรียก LLM เด็ดขาด
 1. รับข้อความ (ตัด "บอทจ๋า" ออกแล้ว หรือมาจากโหมดฟังซึ่งไม่มี "บอทจ๋า" อยู่แล้ว)
 2. Upsert user
 3. โหลด conversation_sessions (ถ้าหมดอายุ → เริ่มใหม่)
-4. โหลดรอบ open ของกลุ่ม → สร้าง {{open_game_summary}}
+4. โหลดทุกรอบที่เปิดอยู่ของกลุ่ม (ไม่เกิน 3) พร้อมรายชื่อ → สร้าง {{open_games_summary}}
 5. สร้าง System Prompt (แทน placeholder)
 6. เรียก Gemini: systemInstruction + tools + history + ข้อความใหม่
 7. ถ้า response มี functionCalls:
@@ -57,7 +57,8 @@ Postback ไม่เรียก LLM เด็ดขาด
 8. ได้ข้อความสุดท้ายจาก Gemini
 9. บันทึก session (ข้อความ user + ข้อความ bot)
 10. App reply LINE: [ข้อความจาก LLM] + [UI attachment ถ้ามี]
-    ยกเว้นมีการเรียก join_game / leave_game / mark_my_payment → ส่งเฉพาะข้อความของระบบ (§8)
+    ยกเว้นมีการเรียก join_game / leave_game / mark_my_payment หรือระบบต้องถามว่ารอบไหน
+    → ส่งเฉพาะข้อความของระบบ (§8)
 ```
 
 ## Limits
@@ -95,7 +96,7 @@ Postback ไม่เรียก LLM เด็ดขาด
 | วันนี้ | `อังคาร 2026-09-15` |
 | เวลาตอนนี้ | `17:30` |
 | คนที่คุยด้วย | `เชวง` |
-| รอบที่เปิดอยู่ | `ABC Badminton \| พุธ 16 ก.ย. 19:00 - 21:00 \| 1 คอร์ท \| 5/8 คน \| มีลิงก์แผนที่ \| คนที่คุยด้วยเป็นคนเปิดรอบนี้ \| และยังไม่ได้ลงชื่อ` หรือ `ไม่มีรอบที่เปิดอยู่` |
+| รอบที่เปิดอยู่ | รอบละบรรทัด เช่น `ABC Badminton \| พุธ 16 ก.ย. (2026-09-16) 19:00 - 21:00 \| 1 คอร์ท \| 5/8 คน \| มีลิงก์แผนที่ \| คนที่คุยด้วยเป็นคนเปิดรอบนี้ \| และยังไม่ได้ลงชื่อ` หรือ `ไม่มีรอบที่เปิดอยู่` ใส่วันที่แบบ YYYY-MM-DD ไว้ด้วย LLM จะได้ส่ง `round_date` ตรงกับรอบจริง |
 
 ตัวอย่างโครงข้อความ (ของจริงอยู่ใน `src/llm/system-prompt.ts`):
 
@@ -106,7 +107,7 @@ Postback ไม่เรียก LLM เด็ดขาด
 - วันนี้: {{weekday}} {{today}}
 - เวลาตอนนี้: {{now_time}} (Asia/Bangkok)
 - คนที่คุยด้วย: {{display_name}}
-- รอบที่เปิดอยู่ในกลุ่มนี้: {{open_game_summary}}
+- รอบที่เปิดอยู่ในกลุ่มนี้: {{open_games_summary}}
 
 ## หน้าที่
 1. เข้าใจสิ่งที่สมาชิกต้องการเกี่ยวกับรอบตีแบด
@@ -187,7 +188,17 @@ R23. อยากคิดเงินแต่ยังไม่ได้บอ
      ไม่ชัดว่าเรื่องไหน → ไม่ส่ง kind | บิลใหม่ → kind "new" | แก้บิลที่ส่งแล้ว → kind "edit"
 R24. propose_create_bill คืน status "awaiting_promptpay" แปลว่าระบบถามเลขพร้อมเพย์ต่อให้แล้ว
      ให้บอกสั้น ๆ ว่ากดหรือพิมพ์เลขด้านล่างได้เลย ยังไม่ใช่ขั้นกดยืนยัน
+
+### หลายรอบ
+R25. ผู้ใช้พูดถึงวันหรือเวลาของรอบ เช่น "ลงชื่อรอบวันเสาร์" ให้ส่ง round_date (บอกเวลาด้วยก็ส่ง round_time)
+     ไม่ได้พูดถึงก็ไม่ต้องส่ง ห้ามถามเองว่ารอบไหน ระบบเลือกรอบหรือขึ้นปุ่มให้ผู้ใช้เลือกเอง
+R25.1 บอทเพิ่งถามว่ารอบไหน แล้วผู้ใช้ตอบเป็นวันหรือเวลา เช่น "เสาร์" ให้เรียก tool เดิมอีกครั้งพร้อม round_date ของรอบนั้น
+R25.2 propose_edit_game: play_date / start_time คือค่าใหม่ของรอบ ส่วน round_date / round_time คือรอบที่จะแก้
 ```
+
+`บอทจ๋า ลงชื่อ รอบวันเสาร์` (เว้นวรรค) ก็มาถึง LLM ด้วย ไม่ใช่คำสั่งตรงตัว
+เพราะส่วนเติมท้ายที่เป็นวันหรือรอบไม่ถือเป็นรายชื่อคน (spec §7) เคยกลายเป็นแขกชื่อ "รอบวันเสาร์"
+ทดสอบกับ Gemini จริง 2026-09-19 ประโยคลงชื่อรอบวันเสาร์ทุกแบบได้ `round_date` ของรอบเสาร์ถูก 7/7 ครั้ง
 
 ตอบต่อจากปุ่ม "สร้างบิลใหม่" (ข้อความถัดไปของคนกด) system prompt ได้หัวข้อ
 **งานที่กำลังทำ: สร้างบิลใหม่** เพิ่มอีกส่วน บอกว่าข้อความนี้คือชื่อบิลกับรายการแน่ ๆ
@@ -281,84 +292,108 @@ const gameFields = {
   },
 };
 
+const peopleFields = {
+  names: {
+    type: Type.ARRAY,
+    items: { type: Type.STRING },
+    description: "ชื่อคนที่ทำรายการให้ ตามที่ผู้ใช้พิมพ์มาเป๊ะ ๆ ห้ามเดาหรือแต่งชื่อเอง",
+  },
+};
+
+/** รอบที่หมายถึง ไม่ใช้ชื่อ play_date / start_time เพราะชนกับค่าใหม่ของ propose_edit_game */
+const roundFields = {
+  round_date: {
+    type: Type.STRING,
+    description: 'วันของรอบที่หมายถึง รูปแบบ YYYY-MM-DD ใส่เฉพาะเมื่อผู้ใช้พูดถึงวันของรอบ เช่น "รอบวันเสาร์"',
+  },
+  round_time: {
+    type: Type.STRING,
+    description: "เวลาเริ่มของรอบที่หมายถึง รูปแบบ HH:mm ใช้แยกสองรอบที่อยู่วันเดียวกัน",
+  },
+};
+
 export const toolDeclarations: FunctionDeclaration[] = [
   {
     name: "get_open_games",
     description:
-      "ดูทุกรอบตีที่เปิดอยู่ของกลุ่มนี้ ได้วัน เวลา จำนวนคอร์ท จำนวนคนที่ลงชื่อ และผู้สร้างของแต่ละรอบ ใช้เมื่อผู้ใช้ถามว่ามีรอบไหม เต็มหรือยัง กี่โมง",
+      "ดูทุกรอบตีที่เปิดอยู่ของกลุ่มนี้ ได้วัน เวลา คอร์ท จำนวนคนที่ลงชื่อ และผู้สร้างของแต่ละรอบ",
   },
   {
     name: "list_players",
-    description: "ดูรายชื่อผู้เล่นที่ลงชื่อในรอบที่เปิดอยู่ของกลุ่มนี้ เรียงตามลำดับที่ลงชื่อ",
+    description: "ดูรายชื่อผู้เล่นที่ลงชื่อ เรียงตามลำดับที่ลงชื่อ ไม่ระบุรอบได้รายชื่อทุกรอบที่เปิดอยู่",
+    parameters: { type: Type.OBJECT, properties: roundFields },
   },
   {
     name: "join_game",
     description:
-      "ลงชื่อ 'ผู้ใช้ที่พิมพ์ข้อความนี้' เข้ารอบที่เปิดอยู่ ใช้เมื่อผู้ใช้บอกว่าจะไปตี ไปด้วย หรือขอลงชื่อ ห้ามใช้เพื่อลงชื่อแทนคนอื่น",
+      "ลงชื่อเข้ารอบที่เปิดอยู่ ไม่ส่ง names มาคือลงชื่อ 'ผู้ใช้ที่พิมพ์ข้อความนี้' " +
+      "ถ้าผู้ใช้เอ่ยชื่อคนอื่นหรือบอกว่าพาเพื่อนมา ให้ส่งชื่อเหล่านั้นใน names",
+    parameters: { type: Type.OBJECT, properties: { ...peopleFields, ...roundFields } },
   },
   {
     name: "leave_game",
     description:
-      "ถอนชื่อ 'ผู้ใช้ที่พิมพ์ข้อความนี้' ออกจากรอบที่เปิดอยู่ ใช้เมื่อผู้ใช้บอกว่าไปไม่ได้ ขอถอนชื่อ ห้ามใช้เพื่อถอนชื่อแทนคนอื่น",
+      "ถอนชื่อออกจากรอบที่เปิดอยู่ ไม่ส่ง names มาคือถอน 'ผู้ใช้ที่พิมพ์ข้อความนี้' " +
+      "ถ้าผู้ใช้บอกให้ถอนคนอื่น ให้ส่งชื่อใน names ระบบจะเช็กรายชื่อและสิทธิ์เอง ถอนคนอื่นต้องกดยืนยันก่อน",
+    parameters: { type: Type.OBJECT, properties: { ...peopleFields, ...roundFields } },
   },
   {
     name: "propose_create_game",
     description:
-      "เสนอสร้างรอบตีใหม่ ยังไม่สร้างจริงจนกว่าผู้ใช้กดปุ่มยืนยัน ส่งเฉพาะค่าที่ผู้ใช้บอกมาแล้ว ถ้ายังไม่ครบ tool จะคืนรายการที่ขาดมาให้ถามต่อ",
-    parameters: {
-      type: Type.OBJECT,
-      properties: gameFields,
-    },
+      "เสนอเปิดรอบตีใหม่ ยังไม่เปิดจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ส่งเฉพาะค่าที่ผู้ใช้บอกมาแล้ว ถ้ายังไม่ครบ tool จะคืนรายการที่ขาดมาให้ถามต่อ",
+    parameters: { type: Type.OBJECT, properties: gameFields },
   },
   {
     name: "propose_edit_game",
     description:
-      "เสนอแก้ไขรอบที่เปิดอยู่ ยังไม่แก้จริงจนกว่าผู้ใช้กดปุ่มยืนยัน ส่งเฉพาะค่าที่ต้องการเปลี่ยน ใช้ได้เฉพาะคนสร้างรอบ",
-    parameters: {
-      type: Type.OBJECT,
-      properties: gameFields,
-    },
+      "เสนอแก้ไขรอบที่เปิดอยู่ ยังไม่แก้จริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ส่งเฉพาะค่าที่ต้องการเปลี่ยน ใช้ได้เฉพาะคนที่เปิดรอบ " +
+      "play_date / start_time คือค่าใหม่ ส่วนรอบที่จะแก้ระบุด้วย round_date / round_time",
+    parameters: { type: Type.OBJECT, properties: { ...gameFields, ...roundFields } },
   },
   {
     name: "propose_cancel_game",
     description:
-      "เสนอยกเลิกรอบที่เปิดอยู่ (ไม่ได้เล่น) ยังไม่ยกเลิกจริงจนกว่าผู้ใช้กดปุ่มยืนยัน ใช้ได้เฉพาะคนสร้างรอบ",
+      "เสนอยกเลิกรอบที่เปิดอยู่ (ไม่ได้เล่น) ยังไม่ยกเลิกจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ใช้ได้เฉพาะคนที่เปิดรอบ",
+    parameters: { type: Type.OBJECT, properties: roundFields },
   },
   {
     name: "propose_close_game",
     description:
-      "เสนอปิดรอบที่เล่นจบแล้ว เพื่อให้กลุ่มเปิดรอบใหม่ได้ ยังไม่ปิดจริงจนกว่าผู้ใช้กดปุ่มยืนยัน ใช้ได้เฉพาะคนสร้างรอบ",
+      "เสนอปิดรอบที่เล่นจบแล้ว ยังไม่ปิดจริงจนกว่าผู้ใช้จะกดปุ่มยืนยัน ใช้ได้เฉพาะคนที่เปิดรอบ " +
+      "รอบที่เลยวันเล่นแล้วระบบปิดให้เองทุกเช้า",
+    parameters: { type: Type.OBJECT, properties: roundFields },
   },
+  // ...get_bill, start_bill, propose_create_bill, mark_my_payment (start_bill กับ propose_create_bill รับ roundFields ด้วย)
 ];
 ```
 
 ## zod Schema (ฝั่ง App)
 
-```ts
-// src/llm/tool-schemas.ts
-import { z } from "zod";
+schema อยู่ไฟล์เดียวกับ declaration (`src/llm/tools.ts`) ตัวอย่างย่อ:
 
-const gameFields = z
-  .object({
-    court_count: z.number().int().min(1).max(4),
-    play_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    start_time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
-    duration_minutes: z.number().int().positive().multipleOf(60),
-  })
+```ts
+const roundArgs = {
+  round_date: z.string().regex(DATE_PATTERN),
+  round_time: z.string().regex(TIME_PATTERN),
+};
+
+const noArgs = z.object({}).strict();
+const roundOnlyArgs = z.object(roundArgs).partial().strict();
+const peopleArgs = z
+  .object({ names: z.array(z.string().trim().min(1).max(MAX_NAME_LENGTH)).max(MAX_NAMES_PER_COMMAND), ...roundArgs })
   .partial()
   .strict();
 
-const noArgs = z.object({}).strict();
-
 export const toolSchemas = {
   get_open_games: noArgs,
-  list_players: noArgs,
-  join_game: noArgs,
-  leave_game: noArgs,
-  propose_create_game: gameFields,
-  propose_edit_game: gameFields,
-  propose_cancel_game: noArgs,
-  propose_close_game: noArgs,
+  list_players: roundOnlyArgs,
+  join_game: peopleArgs,
+  leave_game: peopleArgs,
+  propose_create_game: z.object(gameShape).partial().strict(),
+  propose_edit_game: z.object({ ...gameShape, ...roundArgs }).partial().strict(),
+  propose_cancel_game: roundOnlyArgs,
+  propose_close_game: roundOnlyArgs,
+  // ...get_bill, start_bill, propose_create_bill, mark_my_payment
 } as const;
 ```
 
@@ -694,6 +729,34 @@ Tool → { ok: true, data: { status: "awaiting_confirmation", total_baht: 360 } 
 
 Bot:   เรียบร้อย กดปุ่มยืนยันด้านล่างได้เลย 👇
        [การ์ดบิล: ค่าคอร์ทเก็บทุกคน ค่าน้ำเก็บสองคน ยอดรายคนไม่เท่ากัน]
+```
+
+## 11.8 เลือกรอบตอนกลุ่มเปิดหลายรอบ
+
+ผลจริงจาก Gemini (2026-09-19) กลุ่มเปิดรอบพุธ 23 ก.ย. กับรอบเสาร์ 26 ก.ย. วันนั้นเป็นวันเสาร์
+
+```text
+User:  บอทจ๋า ลงชื่อรอบวันเสาร์
+
+LLM →  join_game { round_date: "2026-09-26" }
+Tool → { ok: true, data: { status: "replied" } }
+
+Bot:   ✅ give ツ ลงชื่อแล้ว (เสาร์ 26 ก.ย. 18:00)
+       👥 1/8 คน
+       (ข้อความของระบบอย่างเดียว ข้อความที่ LLM แต่งเองไม่ถูกส่ง)
+```
+
+ไม่บอกรอบ และทำได้หลายรอบ ระบบถามเอง LLM ไม่ต้องถาม:
+
+```text
+User:  บอทจ๋า ผมไปด้วย
+
+LLM →  join_game {}
+Tool → { ok: true, data: { status: "choose_round" } }
+
+Bot:   [การ์ด "ลงชื่อรอบไหน?" ปุ่มละรอบ + ยกเลิก]
+User:  เสาร์                       ← พิมพ์ตอบแทนการกดได้ในโหมดฟัง
+LLM →  join_game { round_date: "2026-09-26" }
 ```
 
 ---
